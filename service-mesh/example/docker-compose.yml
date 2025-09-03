@@ -1,6 +1,7 @@
 services:
   dstack-mesh:
-    image: kvin/dstack-mesh:sha256:1d8b020a37ccf0c17493bb25f317877fa99e25d7dca2631d26468aa27937534e
+    # TODO: pin hash
+    image: kvin/dstack-mesh:latest
     container_name: dstack-mesh
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock:ro
