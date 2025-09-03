@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use ra_tls::traits::CertExt;
 use rocket::figment::providers::Serialized;
 use rocket::http::{Header, Status};
@@ -6,7 +6,7 @@ use rocket::request::{FromRequest, Outcome};
 use rocket::response::Responder;
 use rocket::response::Response;
 use rocket::{get, routes, Request};
-use tracing::warn;
+use tracing::{info, warn};
 
 /// Custom responder that returns status with headers
 pub struct AuthSuccessResponse {
@@ -50,8 +50,6 @@ async fn auth_handler(headers: AuthHeaders) -> Result<AuthSuccessResponse, Statu
     // Extract client certificate from headers (passed by nginx)
     let cert_header = headers.client_cert.as_ref();
     let verify_header = headers.client_verify.as_ref();
-    tracing::info!("Client cert: {cert_header:?}");
-    tracing::info!("Client verify: {verify_header:?}");
 
     let Some(verify) = verify_header else {
         warn!("Missing verify header");
@@ -68,8 +66,7 @@ async fn auth_handler(headers: AuthHeaders) -> Result<AuthSuccessResponse, Statu
     // Parse and verify certificate
     match parse_and_verify_cert(cert_pem).await {
         Ok(app_id) => {
-            tracing::info!("Auth successful for app_id: {app_id}");
-            // Return OK with app_id header for nginx auth_request_set
+            info!("Auth successful for app_id: {app_id}");
             Ok(AuthSuccessResponse { app_id })
         }
         Err(e) => {
@@ -86,13 +83,11 @@ async fn parse_and_verify_cert(cert_pem: &str) -> Result<String> {
     let cert = ca_pem.parse_x509().context("Failed to parse ca cert")?;
     let Some(app_id_bytes) = cert
         .get_app_id()
-        .context("Failed to get app_id from intermediate CA")?
+        .context("Failed to get app_id from client cert")?
     else {
-        anyhow::bail!("No app_id found in intermediate CA");
+        bail!("No app_id found in client cert");
     };
-    let app_id = hex::encode(app_id_bytes);
-    tracing::info!("Extracted app_id from intermediate CA: {app_id}");
-    Ok(app_id)
+    Ok(hex::encode(app_id_bytes))
 }
 
 /// Health check endpoint

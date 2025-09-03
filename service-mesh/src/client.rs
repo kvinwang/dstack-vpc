@@ -468,12 +468,12 @@ fn extract_target_info(request: &DstackRequest) -> Option<TargetInfo> {
     // Extract app_id (required)
     let app_id = request.target_app.as_ref()?.clone();
 
-    // Extract port (optional, default 80)
+    // Extract port (optional, default 443)
     let port = request
         .target_port
         .as_ref()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(80);
+        .unwrap_or(443);
 
     // Extract instance (optional)
     let instance = request.target_instance.clone().unwrap_or_default();
