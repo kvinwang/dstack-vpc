@@ -1,17 +1,18 @@
 #!/bin/bash
 set -e
 
-GATEWAY_DOMAIN=""
-for url in $(jq -r '.gateway_urls[]' /dstack/.host-shared/.sys-config.json); do
-    echo "Trying gateway URL: $url"
-    if GATEWAY_DOMAIN=$(curl -k -s --max-time 10 "$url/prpc/Info" | jq -r '"\(.base_domain):\(.external_port)"' 2>/dev/null) && [ "$GATEWAY_DOMAIN" != "null:null" ] && [ -n "$GATEWAY_DOMAIN" ]; then
-        echo "Successfully connected to gateway: $GATEWAY_DOMAIN"
-        break
-    else
-        echo "Failed to connect to $url"
-        GATEWAY_DOMAIN=""
-    fi
-done
+if [ -z "$GATEWAY_DOMAIN" ]; then
+    for url in $(jq -r '.gateway_urls[]' /dstack/.host-shared/.sys-config.json); do
+        echo "Trying gateway URL: $url"
+        if GATEWAY_DOMAIN=$(curl -k -s --max-time 10 "$url/prpc/Info" | jq -r '"\(.base_domain):\(.external_port)"' 2>/dev/null) && [ "$GATEWAY_DOMAIN" != "null:null" ] && [ -n "$GATEWAY_DOMAIN" ]; then
+            echo "Successfully connected to gateway: $GATEWAY_DOMAIN"
+            break
+        else
+            echo "Failed to connect to $url"
+            GATEWAY_DOMAIN=""
+        fi
+    done
+fi
 
 if [ -z "$GATEWAY_DOMAIN" ]; then
     echo "ERROR: Could not connect to any gateway URL"

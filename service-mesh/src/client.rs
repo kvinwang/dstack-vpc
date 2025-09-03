@@ -22,7 +22,7 @@ use crate::config::Config;
 use crate::config::TargetInfo;
 
 pub struct ClientState {
-    base_domain: String,
+    gateway_domain: String,
     http_client: Client,
 }
 
@@ -89,8 +89,28 @@ impl AsyncRead for ReqwestStreamReader {
     }
 }
 
+pub enum ProxyResponse {
+    Stream(StreamingProxyResponse),
+    Json(serde_json::Value),
+}
+
 pub struct StreamingProxyResponse {
     response: reqwest::Response,
+}
+
+impl<'r> Responder<'r, 'static> for ProxyResponse {
+    fn respond_to(self, request: &'r rocket::Request<'_>) -> rocket::response::Result<'static> {
+        match self {
+            ProxyResponse::Stream(streaming) => streaming.respond_to(request),
+            ProxyResponse::Json(json) => {
+                let json_string = serde_json::to_string(&json).unwrap_or_default();
+                Response::build()
+                    .header(rocket::http::ContentType::JSON)
+                    .sized_body(json_string.len(), std::io::Cursor::new(json_string))
+                    .ok()
+            }
+        }
+    }
 }
 
 impl<'r> Responder<'r, 'static> for StreamingProxyResponse {
@@ -178,7 +198,7 @@ pub async fn run_client_proxy(main_figment: &Figment, config: &Config) -> Result
     let http_client = create_mtls_client(config).context("Failed to create mTLS HTTP client")?;
 
     let state = ClientState {
-        base_domain: config.agent.gateway_domain.clone(),
+        gateway_domain: config.agent.gateway_domain.clone(),
         http_client,
     };
 
@@ -220,7 +240,7 @@ async fn proxy_get_handler(
     _path: Segments<'_, Path>,
     request: DstackRequest,
     state: &State<ClientState>,
-) -> Result<StreamingProxyResponse, Status> {
+) -> Result<ProxyResponse, Status> {
     proxy_request(&request, state, None).await
 }
 
@@ -231,7 +251,7 @@ async fn proxy_post_handler(
     request: DstackRequest,
     body: Data<'_>,
     state: &State<ClientState>,
-) -> Result<StreamingProxyResponse, Status> {
+) -> Result<ProxyResponse, Status> {
     proxy_request(&request, state, Some(body)).await
 }
 
@@ -242,7 +262,7 @@ async fn proxy_put_handler(
     request: DstackRequest,
     body: Data<'_>,
     state: &State<ClientState>,
-) -> Result<StreamingProxyResponse, Status> {
+) -> Result<ProxyResponse, Status> {
     proxy_request(&request, state, Some(body)).await
 }
 
@@ -253,7 +273,7 @@ async fn proxy_patch_handler(
     request: DstackRequest,
     body: Data<'_>,
     state: &State<ClientState>,
-) -> Result<StreamingProxyResponse, Status> {
+) -> Result<ProxyResponse, Status> {
     proxy_request(&request, state, Some(body)).await
 }
 
@@ -263,7 +283,7 @@ async fn proxy_delete_handler(
     _path: Segments<'_, Path>,
     request: DstackRequest,
     state: &State<ClientState>,
-) -> Result<StreamingProxyResponse, Status> {
+) -> Result<ProxyResponse, Status> {
     proxy_request(&request, state, None).await
 }
 
@@ -277,9 +297,17 @@ fn health_handler() -> Status {
 async fn proxy_to_dstack_sock(
     request: &DstackRequest,
     body: Option<Data<'_>>,
-) -> Result<StreamingProxyResponse, Status> {
-    // Build URL for Unix socket connection
+    state: &State<ClientState>,
+) -> Result<ProxyResponse, Status> {
     let path = request.path.trim_start_matches('/');
+
+    if path.trim_start_matches('/') == "Gateway" {
+        let gateway_info = serde_json::json!({
+            "gateway_domain": state.gateway_domain
+        });
+        return Ok(ProxyResponse::Json(gateway_info));
+    }
+
     let full_path = match &request.query_string {
         Some(query) => format!("{}?{}", path, query),
         None => path.to_string(),
@@ -289,7 +317,7 @@ async fn proxy_to_dstack_sock(
     let agent_sock;
 
     if agent_address.starts_with("unix:") {
-        agent_url = format!("http://dstack/{full_path}");
+        agent_url = format!("http://localhost/{full_path}");
         agent_sock = Some(agent_address.trim_start_matches("unix:").to_string());
     } else {
         agent_url = agent_address;
@@ -324,7 +352,7 @@ async fn proxy_to_dstack_sock(
         }
     }
     match request_builder.send().await {
-        Ok(response) => Ok(StreamingProxyResponse { response }),
+        Ok(response) => Ok(ProxyResponse::Stream(StreamingProxyResponse { response })),
         Err(e) => {
             tracing::error!("Request to dstack.sock failed: {}", e);
             Err(Status::BadGateway)
@@ -336,13 +364,13 @@ async fn proxy_request(
     request: &DstackRequest,
     state: &State<ClientState>,
     body: Option<Data<'_>>,
-) -> Result<StreamingProxyResponse, Status> {
+) -> Result<ProxyResponse, Status> {
     // Extract target info from headers
     let target = match extract_target_info(request) {
         Some(t) => t,
         None => {
             debug!("Missing x-dstack-target-app header, delegating to dstack.sock");
-            return proxy_to_dstack_sock(request, body).await;
+            return proxy_to_dstack_sock(request, body, state).await;
         }
     };
 
@@ -356,10 +384,10 @@ async fn proxy_request(
             Some(query) => format!("{}?{}", path, query),
             None => path.to_string(),
         };
-        let base_domain = state.base_domain.trim_end_matches("/");
+        let gateway_domain = state.gateway_domain.trim_end_matches("/");
 
-        if base_domain.starts_with("fixed/") {
-            let domain = base_domain.trim_start_matches("fixed/");
+        if gateway_domain.starts_with("fixed/") {
+            let domain = gateway_domain.trim_start_matches("fixed/");
             format!("https://{domain}/{full_path}")
         } else {
             let id = if target.instance_id.is_empty() {
@@ -368,7 +396,7 @@ async fn proxy_request(
                 &target.instance_id
             };
             let port = &target.port;
-            format!("https://{id}-{port}s.{base_domain}/{full_path}")
+            format!("https://{id}-{port}s.{gateway_domain}/{full_path}")
         }
     };
 
@@ -427,7 +455,7 @@ async fn proxy_request(
                 return Err(Status::BadGateway);
             }
             // Return the response directly for streaming - no buffering!
-            Ok(StreamingProxyResponse { response })
+            Ok(ProxyResponse::Stream(StreamingProxyResponse { response }))
         }
         Err(e) => {
             tracing::error!("mTLS request to app_id '{}' failed: {}", target.app_id, e);
