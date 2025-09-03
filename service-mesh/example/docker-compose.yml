@@ -1,0 +1,68 @@
+services:
+  dstack-mesh:
+    image: kvin/dstack-mesh:sha256:1d8b020a37ccf0c17493bb25f317877fa99e25d7dca2631d26468aa27937534e
+    container_name: dstack-mesh
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock:ro
+    environment:
+      - BACKEND=backend-app:8080
+      - RUST_LOG=info
+    depends_on:
+      backend-app:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  backend-app:
+    image: node:18-alpine
+    container_name: backend-app
+    restart: unless-stopped
+    command: >
+      node -e "
+      const http = require('http');
+      const server = http.createServer((req, res) => {
+        const appId = req.headers['x-dstack-app-id'] || 'unknown';
+        const response = {
+          app_id: appId,
+          path: req.url,
+          method: req.method,
+          headers: req.headers,
+          message: 'Hello from backend! You are authenticated as: ' + appId
+        };
+        res.writeHead(200, {'Content-Type': 'application/json'});
+        res.end(JSON.stringify(response, null, 2));
+      });
+      server.listen(8080, '0.0.0.0', () => console.log('Backend server running on 0.0.0.0:8080'));
+      "
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  test-client:
+    image: alpine:latest
+    container_name: test-client
+    depends_on:
+      dstack-mesh:
+        condition: service_healthy
+    command: |
+      sh -c '
+        set -e
+        echo "Installing curl and jq..."
+        apk add --no-cache curl jq
+        echo "Getting my app_id from dstack Info endpoint..."
+        APP_ID=$$(curl -s http://dstack-mesh/Info | jq -r .app_id)
+        echo "App ID: $$APP_ID"
+        echo "Testing mesh client proxy..."
+        curl -v -H "x-dstack-target-app: $$APP_ID" -H "x-dstack-target-port: 8080" http://dstack-mesh/
+        echo "Sidecar tests completed. Container will keep running for manual testing..."
+        sleep infinity
+      '
+    restart: unless-stopped
