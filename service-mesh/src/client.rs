@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use dstack_types::dstack_agent_address;
+use heck::ToPascalCase;
 use ra_tls::traits::CertExt as _;
 use reqwest::redirect::Policy;
 use reqwest::tls::TlsInfo;
@@ -301,12 +302,26 @@ async fn proxy_to_dstack_sock(
 ) -> Result<ProxyResponse, Status> {
     let path = request.path.trim_start_matches('/');
 
-    if path.trim_start_matches('/') == "Gateway" {
+    if path.trim_start_matches('/').eq_ignore_ascii_case("gateway") {
         let gateway_info = serde_json::json!({
             "gateway_domain": state.gateway_domain
         });
         return Ok(ProxyResponse::Json(gateway_info));
     }
+
+    let path = {
+        let segments: Vec<&str> = path.split('/').collect();
+        if segments.is_empty() {
+            path.to_string()
+        } else {
+            let mut result = segments[..segments.len() - 1].join("/");
+            if !result.is_empty() {
+                result.push('/');
+            }
+            result.push_str(&segments[segments.len() - 1].to_pascal_case());
+            result
+        }
+    };
 
     let full_path = match &request.query_string {
         Some(query) => format!("{}?{}", path, query),

@@ -59,7 +59,7 @@ services:
         echo "Installing curl and jq..."
         apk add --no-cache curl jq
         echo "Getting my app_id from dstack Info endpoint..."
-        APP_ID=$$(curl -s http://dstack-mesh/Info | jq -r .app_id)
+        APP_ID=$$(curl -s http://dstack-mesh/info | jq -r .app_id)
         echo "App ID: $$APP_ID"
         echo "Testing mesh client proxy..."
         curl -v -H "x-dstack-target-app: $$APP_ID" -H "x-dstack-target-port: 8080" http://dstack-mesh/

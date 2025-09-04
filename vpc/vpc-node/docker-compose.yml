@@ -1,0 +1,181 @@
+services:
+  dstack-mesh:
+    image: kvin/dstack-mesh:latest
+    container_name: dstack-mesh
+    restart: unless-stopped
+    volumes:
+      - /dstack:/dstack
+      - /var/run/dstack.sock:/var/run/dstack.sock
+
+  bootstrap-agent:
+    image: alpine:latest
+    container_name: bootstrap-agent
+    environment:
+      - NODE_TYPE=mongodb
+      - NODE_NAME=mongodb-${MONGO_IND}
+      - VPC_SERVER_APP_ID=${VPC_SERVER_APP_ID}
+    volumes:
+      - shared_config:/shared
+    configs:
+      - source: bootstrap_script
+        target: /bootstrap.sh
+        mode: 0755
+    command: sh -c "apk add --no-cache curl jq && /bootstrap.sh"
+    restart: "no"
+    depends_on:
+      dstack-mesh:
+        condition: service_healthy
+
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tailscale
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    network_mode: host
+    volumes:
+      - shared_config:/shared:ro
+      - tailscale_data:/var/lib/tailscale
+      - /var/run:/var/run
+    configs:
+      - source: tailscale_script
+        target: /tailscale-start.sh
+        mode: 0755
+    environment:
+      - NODE_NAME=mongodb-${MONGO_IND}
+    command: /tailscale-start.sh
+    healthcheck:
+      test: ["CMD", "tailscale", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      bootstrap-agent:
+        condition: service_completed_successfully
+
+  mongodb:
+    image: mongo:7.0
+    container_name: mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - shared_config:/shared:ro
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    configs:
+      - source: mongodb_script
+        target: /mongodb-start.sh
+        mode: 0755
+      - source: mongod_config
+        target: /etc/mongod.conf
+        mode: 0644
+    command: /mongodb-start.sh
+    depends_on:
+      tailscale:
+        condition: service_healthy
+
+volumes:
+  shared_config:
+  tailscale_data:
+  mongodb_data:
+  mongodb_config:
+
+configs:
+  bootstrap_script:
+    content: |
+      #!/bin/sh
+      set -e
+
+      echo "Fetching instance info from dstack-mesh..."
+      INFO=$$(curl -s http://dstack-mesh/info)
+      INSTANCE_ID=$$(echo "$$INFO" | jq -r .instance_id)
+      echo "Instance ID: $$INSTANCE_ID"
+      echo "App ID: $$VPC_SERVER_APP_ID"
+
+      RESPONSE=$$(curl -s -H "x-dstack-target-app: $$VPC_SERVER_APP_ID" \
+        "http://dstack-mesh/api/bootstrap?instance_id=$$INSTANCE_ID&node_type=$$NODE_TYPE&node_name=$$NODE_NAME")
+
+      PRE_AUTH_KEY=$$(echo "$$RESPONSE" | jq -r .pre_auth_key)
+      KEYFILE=$$(echo "$$RESPONSE" | jq -r .keyfile)
+      HEADSCALE_URL=$$(echo "$$RESPONSE" | jq -r .headscale_url)
+
+      if [ -z "$$PRE_AUTH_KEY" ] || [ -z "$$KEYFILE" ] || [ -z "$$HEADSCALE_URL" ]; then
+        echo "Error: Missing required fields in response"
+        echo "Response: $$RESPONSE"
+        exit 1
+      fi
+
+      echo "$$PRE_AUTH_KEY" > /shared/pre_auth_key
+      echo "$$KEYFILE" > /shared/keyfile
+      echo "$$HEADSCALE_URL" > /shared/headscale_url
+
+      echo "Bootstrap completed"
+
+  tailscale_script:
+    content: |
+      #!/bin/sh
+      set -e
+
+      echo 'Waiting for bootstrap files...'
+      while [ ! -f /shared/pre_auth_key ] || [ ! -f /shared/headscale_url ]; do
+        sleep 2
+      done
+
+      PRE_AUTH_KEY=$$(cat /shared/pre_auth_key)
+      HEADSCALE_URL=$$(cat /shared/headscale_url)
+
+      echo 'Starting Tailscale with:'
+      echo "  Server: $$HEADSCALE_URL"
+      echo "  Hostname: $$NODE_NAME"
+
+      tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
+      sleep 3
+
+      tailscale up \
+        --login-server="$$HEADSCALE_URL" \
+        --authkey="$$PRE_AUTH_KEY" \
+        --hostname="$$NODE_NAME" \
+        --accept-routes
+
+      echo 'Tailscale connected successfully'
+      tail -f /dev/null
+
+  mongodb_script:
+    content: |
+      #!/bin/sh
+      set -e
+
+      echo 'Waiting for keyfile...'
+      while [ ! -f /shared/keyfile ]; do
+        sleep 1
+      done
+
+      echo 'Setting up MongoDB keyfile...'
+      cp /shared/keyfile /data/configdb/keyfile
+      chmod 600 /data/configdb/keyfile
+
+      echo 'Starting MongoDB...'
+      exec mongod --config /etc/mongod.conf
+
+  mongod_config:
+    content: |
+      net:
+        port: 27017
+        bindIp: 0.0.0.0
+
+      security:
+        keyFile: /data/configdb/keyfile
+
+      replication:
+        replSetName: mongodb-cluster
+
+      storage:
+        dbPath: /data/db
+
+      processManagement:
+        fork: false

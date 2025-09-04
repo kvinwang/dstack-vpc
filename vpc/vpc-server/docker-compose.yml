@@ -1,0 +1,90 @@
+services:
+  headscale:
+    image: headscale/headscale:latest
+    container_name: headscale
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - headscale_data:/var/lib/headscale
+    configs:
+      - source: headscale_config
+        target: /etc/headscale/config.yaml
+    command: serve
+
+  dstack-mesh:
+    image: kvin/dstack-mesh:latest
+    container_name: dstack-mesh
+    restart: unless-stopped
+    ports:
+      - "443:443"
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - /dstack:/dstack
+    environment:
+      - BACKEND=api-server:8000
+      - RUST_LOG=info
+    depends_on:
+      - api-server
+
+  api-server:
+    image: kvin/dstack-vpc-api-server:latest
+    container_name: api-server
+    restart: unless-stopped
+    environment:
+      - ALLOWED_APPS=any
+      - PORT=8000
+      - HEADSCALE_API_URL=http://headscale:8080
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - api_server_data:/data
+    # TODO: remove the port
+    ports:
+      - "8000:8000"
+    depends_on:
+      - headscale
+
+volumes:
+  headscale_data:
+  api_server_data:
+
+configs:
+  headscale_config:
+    content: |
+      server_url: https://localhost:8080
+      listen_addr: 0.0.0.0:8080
+      metrics_listen_addr: 0.0.0.0:9090
+      grpc_listen_addr: 0.0.0.0:50443
+      grpc_allow_insecure: true
+
+      private_key_path: /var/lib/headscale/private.key
+      noise:
+        private_key_path: /var/lib/headscale/noise_private.key
+
+      prefixes:
+        v6: fd7a:115c:a1e0::/48
+        v4: 100.64.0.0/10
+
+      derp:
+        server:
+          enabled: false
+        urls:
+          - https://controlplane.tailscale.com/derpmap/default
+        paths: []
+
+      database:
+        type: sqlite3
+        sqlite:
+          path: /var/lib/headscale/db.sqlite
+
+      log:
+        format: text
+        level: info
+
+      dns:
+        override_local_dns: false
+        magic_dns: false
+        base_domain: headscale.local
+
+      unix_socket: /var/run/headscale/headscale.sock
+      unix_socket_permission: "0770"

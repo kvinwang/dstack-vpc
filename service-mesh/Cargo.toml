@@ -30,3 +30,4 @@ urlencoding.workspace = true
 x509-parser.workspace = true
 dstack-types.workspace = true
 fs-err.workspace = true
+heck = "0.4"
