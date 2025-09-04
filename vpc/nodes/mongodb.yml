@@ -61,6 +61,8 @@ services:
     image: mongo:7.0
     container_name: mongodb
     restart: unless-stopped
+    environment:
+      - NODE_NAME=mongodb-${MONGO_IND}
     ports:
       - "27017:27017"
     volumes:
@@ -75,6 +77,10 @@ services:
         target: /etc/mongod.conf
         mode: 0644
     command: /mongodb-start.sh
+    dns:
+      - 100.100.100.100
+    dns_search:
+      - dstack.internal
     depends_on:
       tailscale:
         condition: service_healthy
@@ -140,14 +146,15 @@ configs:
         --login-server="$$HEADSCALE_URL" \
         --authkey="$$PRE_AUTH_KEY" \
         --hostname="$$NODE_NAME" \
-        --accept-routes
+        --reset \
+        --accept-dns
 
       echo 'Tailscale connected successfully'
       tail -f /dev/null
 
   mongodb_script:
     content: |
-      #!/bin/sh
+      #!/bin/bash
       set -e
 
       echo 'Waiting for keyfile...'
@@ -159,8 +166,87 @@ configs:
       cp /shared/keyfile /data/configdb/keyfile
       chmod 600 /data/configdb/keyfile
 
+      wait_for_replica_set() {
+        local max_wait=120
+        local wait_time=0
+
+        echo "  Waiting for replica set to elect primary..."
+        while [ $$wait_time -lt $$max_wait ]; do
+          # Check if we have a primary (myState=1 means PRIMARY)
+          local status=$$(mongosh --quiet --eval 'try { rs.status().myState } catch(e) { 0 }' 2>/dev/null | tr -d '\n')
+
+          if [ "$$status" = "1" ]; then
+            echo "    ✅ Primary elected and replica set ready"
+            return 0
+          fi
+
+          sleep 5
+          wait_time=$$((wait_time + 5))
+          echo "    ⏳ Waiting for primary election... ($${wait_time}s/$${max_wait}s)"
+        done
+
+        echo "    ❌ Replica set failed to initialize within $${max_wait}s"
+        return 1
+      }
+
       echo 'Starting MongoDB...'
-      exec mongod --config /etc/mongod.conf
+      mongod --config /etc/mongod.conf &
+      MONGO_PID=$$!
+
+      # Wait for MongoDB to start
+      sleep 10
+
+      # Initialize replica set only on mongodb-0
+      if [ "$$NODE_NAME" = "mongodb-0" ]; then
+        echo 'Checking replica set status...'
+
+        echo 'Initializing replica set...'
+
+        while [ "$$(mongosh --eval 'rs.status().ok' --quiet 2>/dev/null || echo "0")" != "1" ]; do
+          echo 'initializing replica set...'
+          mongosh --eval '
+            rs.initiate({
+              _id: "mongodb-cluster",
+              members: [
+                { _id: 0, host: "mongodb-0.dstack.internal:27017", priority: 2 },
+                { _id: 1, host: "mongodb-1.dstack.internal:27017", priority: 1 },
+                { _id: 2, host: "mongodb-2.dstack.internal:27017", priority: 1 }
+              ]
+            })
+          ' 2>/dev/null || true
+
+          if [ "$$(mongosh --eval 'rs.status().ok' --quiet 2>/dev/null || echo "0")" != "1" ]; then
+            echo "Replica set not ready yet. Retrying in 10 seconds..."
+            sleep 10
+          fi
+        done
+
+        echo "Replica set initialized successfully!"
+
+        # Wait for replica set to be fully ready before creating admin user
+        if ! wait_for_replica_set; then
+          echo "❌ Failed to initialize replica set"
+          exit 1
+        fi
+
+        echo 'Creating admin user...'
+        ADMIN_PASSWORD=$$(head -c 32 /data/configdb/keyfile | base64 | tr -d '\n')
+
+        mongosh --eval "
+          db.getSiblingDB('admin').createUser({
+            user: 'admin',
+            pwd: '$$ADMIN_PASSWORD',
+            roles: [
+              { role: 'root', db: 'admin' },
+              { role: 'userAdminAnyDatabase', db: 'admin' },
+              { role: 'dbAdminAnyDatabase', db: 'admin' },
+              { role: 'readWriteAnyDatabase', db: 'admin' }
+            ]
+          });
+          print('Admin user created successfully!');
+        "
+      fi
+      wait $$MONGO_PID
 
   mongod_config:
     content: |
