@@ -1,26 +1,15 @@
 services:
   dstack-mesh:
-    # TODO: pin hash
-    image: kvin/dstack-mesh:latest
-    container_name: dstack-mesh
+    image: kvin/dstack-mesh@sha256:<hash>
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock:ro
+      - /dstack:/dstack
     environment:
       - BACKEND=backend-app:8080
-      - RUST_LOG=info
-    depends_on:
-      backend-app:
-        condition: service_healthy
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:80/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
 
   backend-app:
-    image: node:18-alpine
+    image: node:18-alpine@sha256:<hash>
     container_name: backend-app
     restart: unless-stopped
     command: >
@@ -48,7 +37,7 @@ services:
       start_period: 10s
 
   test-client:
-    image: alpine:latest
+    image: alpine@sha256:<hash>
     container_name: test-client
     depends_on:
       dstack-mesh:
