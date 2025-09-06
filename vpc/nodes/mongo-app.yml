@@ -3,6 +3,9 @@ services:
     image: kvin/dstack-mesh:latest
     container_name: dstack-mesh
     restart: unless-stopped
+    privileged: true
+    environment:
+      - LOAD_MISSING_MODULES=yes
     volumes:
       - /dstack:/dstack
       - /var/run/dstack.sock:/var/run/dstack.sock

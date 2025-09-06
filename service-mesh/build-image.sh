@@ -1,20 +1,17 @@
 #!/bin/bash
 
 IMAGE_NAME="kvin/dstack-mesh"
-
-THIS_DIR=$(cd "$(dirname "$0")" && pwd)
-cd "$THIS_DIR/.."
-cargo build --release
-docker build -f service-mesh/Dockerfile -t $IMAGE_NAME .
-
-# Default values
 PUSH_IMAGE=false
-# Parse command line arguments
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --push)
             PUSH_IMAGE=true
             shift
+            ;;
+        -t)
+            IMAGE_NAME="$2"
+            shift 2
             ;;
         *)
             echo "Unknown argument: $1"
@@ -23,12 +20,16 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+THIS_DIR=$(cd "$(dirname "$0")" && pwd)
+
+docker build -t "$IMAGE_NAME" "$THIS_DIR"
+
 if [ "$PUSH_IMAGE" = true ]; then
     echo "Pushing image to Docker Hub..."
-    docker push $IMAGE_NAME:latest
+    docker push "$IMAGE_NAME"
     echo "Image pushed successfully!"
 else
     echo "Image built locally. To push to Docker Hub, use:"
-    echo "  docker push $IMAGE_NAME:latest"
+    echo "  docker push $IMAGE_NAME"
     echo "Or run this script with --push flag"
 fi

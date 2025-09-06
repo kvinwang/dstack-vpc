@@ -1,0 +1,56 @@
+upstream backend_app {
+    server ${BACKEND};
+    keepalive 32;
+}
+upstream mesh_auth {
+    server 127.0.0.1:8092;
+    keepalive 32;
+}
+
+server {
+    listen 443 ssl;
+    server_name _;
+
+    ssl_certificate     /etc/ssl/certs/server.crt;
+    ssl_certificate_key /etc/ssl/private/server.key;
+    ssl_client_certificate /etc/ssl/certs/ca.crt;
+    ssl_verify_client optional;
+    ssl_verify_depth 3;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA256;
+    ssl_prefer_server_ciphers off;
+
+    location /health {
+        access_log off;
+        return 200 "healthy\n";
+        add_header Content-Type text/plain;
+    }
+
+    location / {
+        auth_request /auth;
+        auth_request_set $app_id $upstream_http_x_dstack_app_id;
+
+        proxy_set_header X-Dstack-App-Id $app_id;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_pass http://backend_app;
+    }
+
+    location = /auth {
+        internal;
+
+        proxy_set_header x-client-cert $ssl_client_escaped_cert;
+        proxy_set_header x-client-verify $ssl_client_verify;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header X-Original-URI $request_uri;
+        proxy_set_header X-Original-Method $request_method;
+
+        proxy_pass http://mesh_auth/auth;
+    }
+}

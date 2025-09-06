@@ -1,9 +1,22 @@
-FROM ubuntu:24.04
+FROM rust:1.86-alpine AS rust-builder
 
-# Install runtime dependencies
+RUN apk add --no-cache musl-dev
+
+RUN rustup target add x86_64-unknown-linux-musl
+WORKDIR /build
+COPY service-mesh/ /build/service-mesh/
+WORKDIR /build/service-mesh
+RUN cargo build --release --target x86_64-unknown-linux-musl
+
+FROM alpine AS ko-builder
+RUN apk add --no-cache wget jq bash squashfs-tools
+WORKDIR /build
+COPY ./extract-modules.sh /build/
+RUN ./extract-modules.sh
+
+FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y \
     ca-certificates \
-    libssl3 \
     wget \
     curl \
     jq \
@@ -12,37 +25,33 @@ RUN apt-get update && apt-get install -y \
     gettext-base \
     && rm -rf /var/lib/apt/lists/*
 
-# Create necessary directories
 RUN mkdir -p /var/run/dstack \
     /etc/dstack \
     /etc/ssl/certs \
     /etc/ssl/private \
     /var/log/supervisor \
     /var/log/nginx \
-    /scripts
+    /scripts \
+    /lib/extra-modules
 
-# Copy the pre-built binary
-COPY target/release/dstack-mesh /usr/local/bin/dstack-mesh
+COPY --from=rust-builder /build/service-mesh/target/x86_64-unknown-linux-musl/release/dstack-mesh /usr/local/bin/dstack-mesh
 RUN chmod +x /usr/local/bin/dstack-mesh
 
-# Copy configuration files
-COPY service-mesh/fs/nginx.conf.template /etc/nginx/nginx.conf.template
-COPY service-mesh/fs/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY --from=ko-builder /build/netfilter-modules/*.ko /lib/extra-modules/
 
-# Copy scripts
-COPY service-mesh/fs/startup.sh /scripts/startup.sh
+COPY fs/nginx.conf /etc/nginx/nginx.conf
+COPY fs/client-proxy.conf /etc/nginx/conf.d/client-proxy.conf
+COPY fs/server-proxy.conf.template /etc/nginx/templates/server-proxy.conf.template
+COPY fs/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY fs/startup.sh /scripts/startup.sh
 RUN chmod +x /scripts/startup.sh
 
-# Expose ports
 EXPOSE 80 443 8091 8092
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD wget --quiet --tries=1 --spider http://localhost:8091/health || exit 1
 
-# Set environment variables
 ENV BACKEND=localhost:8080
 ENV RUST_LOG=info
 
-# Entry point
 ENTRYPOINT ["/bin/bash", "-c", "/scripts/startup.sh"]

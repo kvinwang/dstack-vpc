@@ -50,6 +50,20 @@ services:
     restart: unless-stopped
 ```
 
+Client side compose:
+```yaml
+services:
+  dstack-mesh:
+    image: kvin/dstack-mesh@sha256:<hash>
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock:ro
+      - /dstack:/dstack
+    restart: unless-stopped
+  test-client:
+    image: your-test-client-image@sha256:<hash>
+    restart: unless-stopped
+```
+
 Test the service mesh with curl:
 
 ```bash

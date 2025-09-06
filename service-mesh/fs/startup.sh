@@ -18,11 +18,6 @@ if [ -z "$GATEWAY_DOMAIN" ]; then
     echo "ERROR: Could not connect to any gateway URL"
     exit 1
 fi
-echo "GATEWAY_DOMAIN=$GATEWAY_DOMAIN"
-echo "BACKEND: ${BACKEND}"
-
-echo "Using nginx configuration..."
-envsubst '${BACKEND}' </etc/nginx/nginx.conf.template >/etc/nginx/nginx.conf
 
 cat >/etc/dstack/dstack-mesh.toml <<EOF
 [client]
@@ -59,6 +54,45 @@ chmod 644 /etc/ssl/private/server.key /etc/ssl/certs/server.crt /etc/ssl/certs/c
 
 echo "Certificate generation completed!"
 rm -f /tmp/server_response.json
+
+if [ "$LOAD_MISSING_MODULES" = "yes" ]; then
+    echo "Loaded netfilter modules:"
+    lsmod | grep -E "(nf_|xt_|x_tables)" | awk '{print $1}' | sort
+    echo "Loading netfilter kernel modules..."
+    MODULES=(
+        "xt_mark"
+        "xt_connmark"
+    )
+    for module in "${MODULES[@]}"; do
+        echo "Loading module: $module"
+        if insmod /lib/extra-modules/$module.ko 2>/dev/null; then
+            echo "Successfully loaded: $module"
+        else
+            echo "Failed to load module: $module (may already be loaded, built-in, or unavailable)"
+        fi
+    done
+
+    echo "Module loading completed."
+fi
+
+echo "GATEWAY_DOMAIN=$GATEWAY_DOMAIN"
+echo "BACKEND: ${BACKEND}"
+
+if [ -z "$BACKEND" ]; then
+    rm -rf /etc/nginx/conf.d/server-proxy.conf || true
+else
+    envsubst '${BACKEND}' < /etc/nginx/templates/server-proxy.conf.template > /etc/nginx/conf.d/server-proxy.conf
+fi
+
+echo "Testing nginx configuration..."
+if nginx -t 2>/dev/null; then
+    echo "Nginx configuration is valid"
+else
+    echo "ERROR: Nginx configuration test failed!"
+    nginx -t
+    exit 1
+fi
+
 
 echo "Starting supervisor to manage all services..."
 exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
