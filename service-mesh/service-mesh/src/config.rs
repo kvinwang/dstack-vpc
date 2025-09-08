@@ -13,12 +13,14 @@ pub struct Config {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AuthConfig {
+    pub enabled: bool,
     pub address: IpAddr,
     pub port: u16,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClientConfig {
+    pub enabled: bool,
     pub address: IpAddr,
     pub port: u16,
 }

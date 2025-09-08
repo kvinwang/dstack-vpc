@@ -41,15 +41,28 @@ async fn main() -> Result<()> {
     info!("Starting dstack mesh proxy {}", app_version());
     info!("Configuration loaded successfully");
 
+    let client_service = async {
+        if config.client.enabled {
+            client::run_client_proxy(&figment, &config).await
+        } else {
+            core::future::pending().await
+        }
+    };
+
+    let auth_service = async {
+        if config.auth.enabled {
+            server::run_auth_service(&figment).await
+        } else {
+            core::future::pending().await
+        }
+    };
+
     // Start both services - each service creates its own Rocket figment internally
     tokio::select! {
-        result = client::run_client_proxy(
-            &figment,
-            &config
-        ) => {
+        result = client_service => {
             result.context("Client proxy failed")?;
         }
-        result = server::run_auth_service(&figment) => {
+        result = auth_service => {
             result.context("Auth service failed")?;
         }
     }
