@@ -6,8 +6,7 @@ port = 8091
 address = "0.0.0.0"
 port = 8092
 
-[agent]
-socket = "/var/run/dstack.sock"
+[dstack]
 gateway_domain = "fixed/127.0.0.1:443"
 
 [tls]

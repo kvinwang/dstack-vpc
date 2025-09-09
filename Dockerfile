@@ -1,12 +1,17 @@
 FROM rust:1.86-alpine AS rust-builder
-
 RUN apk add --no-cache musl-dev
-
 RUN rustup target add x86_64-unknown-linux-musl
 WORKDIR /build
 COPY service-mesh/ /build/service-mesh/
 WORKDIR /build/service-mesh
 RUN cargo build --release --target x86_64-unknown-linux-musl
+
+FROM golang:1.21-alpine AS go-builder
+WORKDIR /build
+COPY vpc-api-server/ /build/
+RUN go mod init vpc-api-server || true
+RUN go get github.com/gin-gonic/gin
+RUN CGO_ENABLED=0 GOOS=linux go build -a -o vpc-api-server main.go
 
 FROM alpine AS ko-builder
 RUN apk add --no-cache wget jq bash squashfs-tools
@@ -23,7 +28,12 @@ RUN apt-get update && apt-get install -y \
     nginx \
     supervisor \
     gettext-base \
-    && rm -rf /var/lib/apt/lists/*
+    socat \
+    kmod
+
+RUN curl -fsSL https://get.docker.com | sh
+RUN usermod -aG docker root
+
 
 RUN mkdir -p /var/run/dstack \
     /etc/dstack \
@@ -37,21 +47,22 @@ RUN mkdir -p /var/run/dstack \
 COPY --from=rust-builder /build/service-mesh/target/x86_64-unknown-linux-musl/release/dstack-mesh /usr/local/bin/dstack-mesh
 RUN chmod +x /usr/local/bin/dstack-mesh
 
+COPY --from=go-builder /build/vpc-api-server /usr/local/bin/vpc-api-server
+RUN chmod +x /usr/local/bin/vpc-api-server
+
 COPY --from=ko-builder /build/netfilter-modules/*.ko /lib/extra-modules/
 
-COPY fs/nginx.conf /etc/nginx/nginx.conf
-COPY fs/client-proxy.conf /etc/nginx/conf.d/client-proxy.conf
-COPY fs/server-proxy.conf.template /etc/nginx/templates/server-proxy.conf.template
-COPY fs/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-COPY fs/startup.sh /scripts/startup.sh
-RUN chmod +x /scripts/startup.sh
+COPY configs/nginx.conf /etc/nginx/nginx.conf
+COPY configs/nginx-client-proxy.conf /etc/nginx/conf.d/client-proxy.conf
+COPY configs/nginx-server-proxy.conf.template /etc/nginx/templates/server-proxy.conf.template
+COPY configs/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY configs/headscale_config.yaml /etc/headscale/config.yaml
+COPY scripts /scripts
+RUN chmod +x /scripts/*.sh
 
 EXPOSE 80 443 8091 8092
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD wget --quiet --tries=1 --spider http://localhost:8091/health || exit 1
+HEALTHCHECK CMD /scripts/healthcheck.sh
 
-ENV BACKEND=localhost:8080
-ENV RUST_LOG=info
-
-ENTRYPOINT ["/bin/bash", "-c", "/scripts/startup.sh"]
+ENTRYPOINT ["/scripts/entrypoint.sh"]
+CMD ["/scripts/auto-entry.sh"]

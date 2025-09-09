@@ -31,8 +31,8 @@ type NodeInfo struct {
 
 type BootstrapResponse struct {
 	PreAuthKey   string `json:"pre_auth_key"`
-	Keyfile      string `json:"keyfile"`
-	HeadscaleURL string `json:"headscale_url"`
+	SharedKey    string `json:"shared_key"`
+	ServerUrl string `json:"server_url"`
 }
 
 type NodesResponse struct {
@@ -43,9 +43,12 @@ type AppState struct {
 	config       Config
 	nodes        map[string]NodeInfo
 	mutex        sync.RWMutex
-	keyfile      string
-	headscaleURL string
+	sharedKey    string
+	ServerUrl string
 }
+
+var dstackMeshURL string
+var headscaleInternalURL string
 
 type DstackInfo struct {
 	AppID string `json:"app_id"`
@@ -56,7 +59,7 @@ type GatewayInfo struct {
 }
 
 func getAppIDFromDstackMesh() (string, error) {
-	resp, err := http.Get("http://dstack-mesh/info")
+	resp, err := http.Get(fmt.Sprintf("%s/info", dstackMeshURL))
 	if err != nil {
 		return "", fmt.Errorf("failed to get app info: %w", err)
 	}
@@ -75,7 +78,7 @@ func getAppIDFromDstackMesh() (string, error) {
 }
 
 func getGatewayDomainFromDstackMesh() (string, error) {
-	resp, err := http.Get("http://dstack-mesh/gateway")
+	resp, err := http.Get(fmt.Sprintf("%s/gateway", dstackMeshURL))
 	if err != nil {
 		return "", fmt.Errorf("failed to get gateway info: %w", err)
 	}
@@ -95,7 +98,7 @@ func getGatewayDomainFromDstackMesh() (string, error) {
 
 func buildHeadscaleURL() string {
 	// Check for explicit configuration first
-	if url := os.Getenv("HEADSCALE_URL"); url != "" {
+	if url := os.Getenv("VPC_SERVER_URL"); url != "" {
 		return url
 	}
 
@@ -185,25 +188,10 @@ type PreAuthKeyResponse struct {
 }
 
 func getAPIKey() (string, error) {
-	// Try environment variable first
 	if apiKey := os.Getenv("HEADSCALE_API_KEY"); apiKey != "" {
 		return apiKey, nil
 	}
-
-	// Try reading from shared file
-	keyBytes, err := os.ReadFile("/data/api_key")
-	if err != nil {
-		return "", fmt.Errorf("failed to read API key from file: %w", err)
-	}
-
-	return strings.TrimSpace(string(keyBytes)), nil
-}
-
-func getHeadscaleAPIURL() string {
-	if url := os.Getenv("HEADSCALE_API_URL"); url != "" {
-		return url
-	}
-	return "http://headscale:8080"
+	return "", fmt.Errorf("HEADSCALE_API_KEY is not set")
 }
 
 func getUserID(username string) (string, error) {
@@ -213,7 +201,7 @@ func getUserID(username string) (string, error) {
 	}
 
 	client := &http.Client{}
-	req, err := http.NewRequest("GET", getHeadscaleAPIURL()+"/api/v1/user", nil)
+	req, err := http.NewRequest("GET", headscaleInternalURL+"/api/v1/user", nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
@@ -271,7 +259,7 @@ func generatePreAuthKey() (string, error) {
 	}
 
 	client := &http.Client{}
-	req, err := http.NewRequest("POST", getHeadscaleAPIURL()+"/api/v1/preauthkey", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequest("POST", headscaleInternalURL+"/api/v1/preauthkey", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
@@ -310,42 +298,20 @@ func generatePreAuthKey() (string, error) {
 	return keyResp.PreAuthKey.Key, nil
 }
 
-func getHeadscaleNodes() ([]HeadscaleNode, error) {
-	apiKey, err := getAPIKey()
-	if err != nil {
-		return nil, err
-	}
-
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", getHeadscaleAPIURL()+"/api/v1/node", nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("headscale API request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("headscale API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var response struct {
-		Nodes []HeadscaleNode `json:"nodes"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return response.Nodes, nil
-}
-
 func main() {
+	// Initialize global dstackMeshURL
+	dstackMeshURL = os.Getenv("DSTACK_MESH_URL")
+	if dstackMeshURL == "" {
+		log.Fatal("DSTACK_MESH_URL is not set")
+		os.Exit(1)
+	}
+
+	headscaleInternalURL = os.Getenv("HEADSCALE_INTERNAL_URL")
+	if headscaleInternalURL == "" {
+		log.Fatal("HEADSCALE_INTERNAL_URL is not set")
+		os.Exit(1)
+	}
+
 	allowedApps := os.Getenv("ALLOWED_APPS")
 
 	port := os.Getenv("PORT")
@@ -358,18 +324,18 @@ func main() {
 		AllowedNodeTypes: []string{"mongodb", "app"},
 	}
 
-	keyBytes := make([]byte, 32)
+	keyBytes := make([]byte, 64)
 	rand.Read(keyBytes)
-	keyfile := base64.StdEncoding.EncodeToString(keyBytes)
+	sharedKey := base64.StdEncoding.EncodeToString(keyBytes)
 
-	headscaleURL := buildHeadscaleURL()
-	log.Printf("Using Headscale URL: %s", headscaleURL)
+	ServerUrl := buildHeadscaleURL()
+	log.Printf("Using Headscale URL: %s", ServerUrl)
 
 	state := &AppState{
 		config:       config,
 		nodes:        make(map[string]NodeInfo),
-		keyfile:      keyfile,
-		headscaleURL: headscaleURL,
+		sharedKey:    sharedKey,
+		ServerUrl: ServerUrl,
 	}
 
 	log.Printf("API server starting with allowed apps: %v", config.AllowedApps)
@@ -377,7 +343,7 @@ func main() {
 	r := gin.Default()
 
 	r.Use(func(c *gin.Context) {
-		if c.Request.URL.Path == "/health" || c.Request.URL.Path == "/api/nodes" {
+		if c.Request.URL.Path == "/health" {
 			c.Next()
 			return
 		}
@@ -398,26 +364,12 @@ func main() {
 		c.Next()
 	})
 
-	r.GET("/api/bootstrap", func(c *gin.Context) {
+	r.GET("/api/register", func(c *gin.Context) {
 		instanceUUID := c.Query("instance_id")
-		nodeType := c.Query("node_type")
 		nodeName := c.Query("node_name")
 
-		if instanceUUID == "" || nodeType == "" {
+		if instanceUUID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Missing required parameters"})
-			return
-		}
-
-		allowed := false
-		for _, t := range state.config.AllowedNodeTypes {
-			if t == nodeType {
-				allowed = true
-				break
-			}
-		}
-
-		if !allowed {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid node type"})
 			return
 		}
 
@@ -435,7 +387,6 @@ func main() {
 		nodeInfo := NodeInfo{
 			UUID:        instanceUUID,
 			Name:        nodeName,
-			NodeType:    nodeType,
 			TailscaleIP: nil,
 		}
 
@@ -445,64 +396,19 @@ func main() {
 
 		response := BootstrapResponse{
 			PreAuthKey:   preAuthKey,
-			Keyfile:      state.keyfile,
-			HeadscaleURL: state.headscaleURL,
+			SharedKey:    state.sharedKey,
+			ServerUrl: state.ServerUrl,
 		}
 
 		log.Printf("Bootstrap request from %s (%s)", nodeName, instanceUUID)
 		c.JSON(http.StatusOK, response)
 	})
 
-	r.GET("/api/nodes", func(c *gin.Context) {
-		nodeType := c.Query("node_type")
-
-		headscaleNodes, err := getHeadscaleNodes()
-		if err != nil {
-			log.Printf("Failed to get headscale nodes: %v", err)
-			state.mutex.RLock()
-			var filteredNodes []NodeInfo
-			for _, node := range state.nodes {
-				if nodeType == "" || node.NodeType == nodeType {
-					filteredNodes = append(filteredNodes, node)
-				}
-			}
-			state.mutex.RUnlock()
-			if filteredNodes == nil {
-				filteredNodes = []NodeInfo{}
-			}
-			response := NodesResponse{Nodes: filteredNodes}
-			c.JSON(http.StatusOK, response)
-			return
-		}
-
-		state.mutex.RLock()
-		var mergedNodes []NodeInfo
-		for _, hsNode := range headscaleNodes {
-			storedNode, exists := state.nodes[hsNode.Name] // Use name as lookup key
-			if exists {
-				mergedNode := NodeInfo{
-					UUID:        storedNode.UUID,
-					Name:        storedNode.Name,
-					NodeType:    storedNode.NodeType,
-					TailscaleIP: &hsNode.IPAddresses[0],
-				}
-				if nodeType == "" || mergedNode.NodeType == nodeType {
-					mergedNodes = append(mergedNodes, mergedNode)
-				}
-			}
-		}
-		state.mutex.RUnlock()
-
-		if mergedNodes == nil {
-			mergedNodes = []NodeInfo{}
-		}
-		response := NodesResponse{Nodes: mergedNodes}
-		c.JSON(http.StatusOK, response)
-	})
-
-	r.GET("/health", func(c *gin.Context) {
+	healthHandler := func(c *gin.Context) {
 		c.String(http.StatusOK, "OK")
-	})
+	}
+	r.GET("/health", healthHandler)
+	r.HEAD("/health", healthHandler)
 
 	log.Printf("API server listening on port %s", port)
 	r.Run(":" + port)

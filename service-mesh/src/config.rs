@@ -7,24 +7,26 @@ use std::net::IpAddr;
 pub struct Config {
     pub auth: AuthConfig,
     pub client: ClientConfig,
-    pub agent: AgentConfig,
+    pub dstack: DstackConfig,
     pub tls: TlsConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AuthConfig {
+    pub enabled: bool,
     pub address: IpAddr,
     pub port: u16,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClientConfig {
+    pub enabled: bool,
     pub address: IpAddr,
     pub port: u16,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct AgentConfig {
+pub struct DstackConfig {
     pub gateway_domain: String,
 }
 

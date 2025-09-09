@@ -42,7 +42,7 @@ services:
       - /var/run/dstack.sock:/var/run/dstack.sock:ro
       - /dstack:/dstack
     environment:
-      - BACKEND=backend-app:8080
+      - MESH_BACKEND=backend-app:8080
     restart: unless-stopped
 
   backend-app:

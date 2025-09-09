@@ -199,7 +199,7 @@ pub async fn run_client_proxy(main_figment: &Figment, config: &Config) -> Result
     let http_client = create_mtls_client(config).context("Failed to create mTLS HTTP client")?;
 
     let state = ClientState {
-        gateway_domain: config.agent.gateway_domain.clone(),
+        gateway_domain: config.dstack.gateway_domain.clone(),
         http_client,
     };
 
