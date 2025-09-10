@@ -37,8 +37,7 @@ gen-vpc-server() {
   fi
   cat <<EOF
   dstack-vpc-server:
-    # TODO: pin hash
-    image: headscale/headscale:latest
+    image: headscale/headscale@sha256:404e3251f14f080e99093e8855a4a70062271ac7111153eb02a1f879f9f200c8
     container_name: dstack-vpc-server
     restart: unless-stopped
     ports:
@@ -92,8 +91,7 @@ gen-vpc-client() {
     networks:
       - project
   dstack-vpc-client:
-    # TODO: pin hash
-    image: tailscale/tailscale:latest
+    image: tailscale/tailscale@sha256:5bbcf89bb34fd477cae8ff516bddb679023f7322f1e959c0714d07c622444bb4
     restart: unless-stopped
     cap_add:
       - NET_ADMIN

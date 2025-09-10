@@ -1,6 +1,6 @@
 #!/bin/bash
 
-IMAGE_NAME="kvin/dstack-mesh"
+IMAGE_NAME="kvin/dstack-service"
 PUSH_IMAGE=false
 
 while [[ $# -gt 0 ]]; do
