@@ -1,0 +1,132 @@
+
+services:
+  dstack-service:
+    image: kvin/dstack-service@sha256:b28ba2d4547607188942eaf61735ea82a17a35a1140b8890cfcf9eedee264d42
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - VPC_NODE_NAME=app-${APP_IND}
+      - VPC_SERVER_APP_ID=${VPC_SERVER_APP_ID}
+  
+  app:
+    image: node:18-alpine@sha256:8d6421d663b4c28fd3ebc498332f249011d118945588d0a35cb9bc4b8ca09d9e
+    container_name: app
+    restart: unless-stopped
+    working_dir: /app
+    configs:
+      - source: app_script
+        target: /app/app.js
+        mode: 0644
+      - source: app_package_json
+        target: /app/package.json
+        mode: 0644
+      - source: app_start_script
+        target: /start.sh
+        mode: 0755
+    command: /start.sh
+    dns:
+      - 100.100.100.100
+    dns_search:
+      - dstack.internal
+    depends_on:
+      dstack-service:
+        condition: service_healthy
+
+configs:
+  app_start_script:
+    content: |
+      #!/bin/sh
+      set -e
+
+      echo 'Installing dependencies...'
+      npm install
+
+      # Install wget if not present
+      if ! command -v wget &> /dev/null; then
+        echo 'Installing wget...'
+        apk add --no-cache wget
+      fi
+
+      echo 'Waiting for keyfile...'
+      while ! wget --spider -q http://dstack-service/vpc/0/shared_key 2>/dev/null; do
+        sleep 1
+      done
+
+      echo 'Downloading keyfile...'
+      wget -q -O /tmp/keyfile http://dstack-service/vpc/0/shared_key
+
+      echo 'Starting demo app...'
+      node app.js
+
+  app_package_json:
+    content: |
+      {
+        "name": "mongodb-demo",
+        "version": "1.0.0",
+        "dependencies": {
+          "mongodb": "^6.3.0"
+        }
+      }
+
+  app_script:
+    content: |
+      const { MongoClient } = require('mongodb');
+      const fs = require('fs');
+
+      async function main() {
+        try {
+          // Derive password from keyfile
+          const keyfile = fs.readFileSync('/tmp/keyfile');
+          const password = keyfile.subarray(0, 32).toString('base64');
+          const uri = `mongodb://admin:$${password}@mongodb-0.dstack.internal:27017,mongodb-1.dstack.internal:27017,mongodb-2.dstack.internal:27017/demo?replicaSet=mongodb-cluster&authSource=admin`;
+          const client = new MongoClient(uri);
+          for (let i = 0; i < 10; i++) {
+            try {
+              console.log('Connecting to MongoDB cluster...');
+              await client.connect();
+              console.log('Connected to MongoDB cluster');
+              break;
+            } catch (error) {
+              console.error('Failed to connect to MongoDB cluster:', error);
+              await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+          }
+
+          const db = client.db('demo');
+          const collection = db.collection('test');
+
+          // Insert a test document
+          const result = await collection.insertOne({
+            message: 'Hello from demo app!',
+            timestamp: new Date(),
+            hostname: require('os').hostname()
+          });
+
+          console.log('Inserted document:', result.insertedId);
+
+          // Read back the documents
+          const docs = await collection.find({}).toArray();
+          console.log('All documents:', docs);
+
+          // Keep running and insert a document every 30 seconds
+          setInterval(async () => {
+            try {
+              const result = await collection.insertOne({
+                message: 'Periodic update',
+                timestamp: new Date(),
+                hostname: require('os').hostname()
+              });
+              console.log('Periodic insert:', result.insertedId);
+            } catch (error) {
+              console.error('Periodic insert error:', error);
+            }
+          }, 30000);
+
+        } catch (error) {
+          console.error('Error:', error);
+          process.exit(1);
+        }
+      }
+
+      main();

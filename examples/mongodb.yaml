@@ -1,0 +1,164 @@
+
+services:
+  dstack-service:
+    image: kvin/dstack-service@sha256:b28ba2d4547607188942eaf61735ea82a17a35a1140b8890cfcf9eedee264d42
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - VPC_NODE_NAME=mongodb-${MONGO_IND}
+      - VPC_SERVER_APP_ID=${VPC_SERVER_APP_ID}
+  
+  mongodb:
+    image: mongo:7.0@sha256:228dfdc4e3ee9593ca98dcd4ae6997a788e57cb68a0836b9e8107555a7096705
+    container_name: mongodb
+    restart: unless-stopped
+    environment:
+      - NODE_NAME=mongodb-${MONGO_IND}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    configs:
+      - source: mongodb_script
+        target: /mongodb-start.sh
+        mode: 0755
+      - source: mongod_config
+        target: /etc/mongod.conf
+        mode: 0644
+    command: /mongodb-start.sh
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "try { rs.status().ok } catch(e) { 0 }"]
+    dns:
+      - 100.100.100.100
+    dns_search:
+      - dstack.internal
+    depends_on:
+      dstack-service:
+        condition: service_healthy
+
+volumes:
+  mongodb_data:
+  mongodb_config:
+
+configs:
+  mongodb_script:
+    content: |
+      #!/bin/bash
+      set -e
+
+      # Install wget if not present
+      if ! command -v wget &> /dev/null; then
+        echo 'Installing wget...'
+        apt-get update && apt-get install -y wget
+      fi
+      
+      echo 'Waiting for keyfile...'
+      while ! wget --spider -q http://dstack-service/vpc/0/shared_key 2>/dev/null; do
+        sleep 1
+      done
+
+      echo 'Downloading and setting up MongoDB keyfile...'
+      wget -q -O /data/configdb/keyfile http://dstack-service/vpc/0/shared_key
+      chmod 600 /data/configdb/keyfile
+
+      wait_for_replica_set() {
+        local max_wait=120
+        local wait_time=0
+
+        echo "  Waiting for replica set to elect primary..."
+        while [ $$wait_time -lt $$max_wait ]; do
+          # Check if we have a primary (myState=1 means PRIMARY)
+          local status=$$(mongosh --quiet --eval 'try { rs.status().myState } catch(e) { 0 }' 2>/dev/null | tr -d '\n')
+
+          if [ "$$status" = "1" ]; then
+            echo "    ✅ Primary elected and replica set ready"
+            return 0
+          fi
+
+          sleep 5
+          wait_time=$$((wait_time + 5))
+          echo "    ⏳ Waiting for primary election... ($${wait_time}s/$${max_wait}s)"
+        done
+
+        echo "    ❌ Replica set failed to initialize within $${max_wait}s"
+        return 1
+      }
+
+      echo 'Starting MongoDB...'
+      mongod --config /etc/mongod.conf &
+      MONGO_PID=$$!
+
+      # Wait for MongoDB to start
+      sleep 10
+
+      # Initialize replica set only on mongodb-0
+      if [ "$$NODE_NAME" = "mongodb-0" ]; then
+        echo 'Checking replica set status...'
+
+        echo 'Initializing replica set...'
+
+        while [ "$$(mongosh --eval 'rs.status().ok' --quiet 2>/dev/null || echo "0")" != "1" ]; do
+          echo 'initializing replica set...'
+          mongosh --eval '
+            rs.initiate({
+              _id: "mongodb-cluster",
+              members: [
+                { _id: 0, host: "mongodb-0.dstack.internal:27017", priority: 2 },
+                { _id: 1, host: "mongodb-1.dstack.internal:27017", priority: 1 },
+                { _id: 2, host: "mongodb-2.dstack.internal:27017", priority: 1 }
+              ]
+            })
+          ' 2>/dev/null || true
+
+          if [ "$$(mongosh --eval 'rs.status().ok' --quiet 2>/dev/null || echo "0")" != "1" ]; then
+            echo "Replica set not ready yet. Retrying in 10 seconds..."
+            sleep 10
+          fi
+        done
+
+        echo "Replica set initialized successfully!"
+
+        # Wait for replica set to be fully ready before creating admin user
+        if ! wait_for_replica_set; then
+          echo "❌ Failed to initialize replica set"
+          exit 1
+        fi
+
+        echo 'Creating admin user...'
+        ADMIN_PASSWORD=$$(head -c 32 /data/configdb/keyfile | base64 | tr -d '\n')
+
+        mongosh --eval "
+          db.getSiblingDB('admin').createUser({
+            user: 'admin',
+            pwd: '$$ADMIN_PASSWORD',
+            roles: [
+              { role: 'root', db: 'admin' },
+              { role: 'userAdminAnyDatabase', db: 'admin' },
+              { role: 'dbAdminAnyDatabase', db: 'admin' },
+              { role: 'readWriteAnyDatabase', db: 'admin' }
+            ]
+          });
+          print('Admin user created successfully!');
+        "
+      fi
+      wait $$MONGO_PID
+
+  mongod_config:
+    content: |
+      net:
+        port: 27017
+        bindIp: 0.0.0.0
+
+      security:
+        keyFile: /data/configdb/keyfile
+
+      replication:
+        replSetName: mongodb-cluster
+
+      storage:
+        dbPath: /data/db
+
+      processManagement:
+        fork: false
