@@ -46,5 +46,5 @@ export HEADSCALE_API_KEY="$API_KEY"
 export HEADSCALE_INTERNAL_URL="http://${HS}:8080"
 export DSTACK_MESH_URL="http://${DSTACK_MESH_CONTAINER_NAME}"
 
-healthcheck_url "http://127.0.0.1:$PORT/health"
+healthcheck url "http://127.0.0.1:$PORT/health"
 exec vpc-api-server

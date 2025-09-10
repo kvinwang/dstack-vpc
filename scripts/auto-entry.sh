@@ -2,7 +2,6 @@
 set -e
 
 source /scripts/functions.sh
-healthcheck_url "http://127.0.0.1:80/health"
 
 PATH=/scripts:$PATH
 
@@ -41,5 +40,14 @@ echo "Generating docker-compose.yml..."
 cat docker-compose.yml
 
 socat TCP-LISTEN:80,fork TCP:$MESH_CONTAINER_NAME:80 &
+
+healthcheck url "http://127.0.0.1:80/health"
+if [ "${VPC_SERVER_ENABLED}" == "true" ]; then
+    healthcheck -a container "${VPC_SERVER_CONTAINER_NAME}"
+    healthcheck -a container "${VPC_API_SERVER_CONTAINER_NAME}"
+fi
+if [ "${VPC_NODE_NAME}" != "" ]; then
+    healthcheck -a container "${VPC_CLIENT_CONTAINER_NAME}"
+fi
 
 docker compose up --remove-orphans --force-recreate

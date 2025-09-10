@@ -12,6 +12,7 @@ gen-dstack-mesh() {
   cat <<EOF
   $MESH_CONTAINER_NAME:
     image: ${DSTACK_CONTAINER_IMAGE_ID}
+    container_name: ${MESH_CONTAINER_NAME}
     restart: unless-stopped
     ports:
       - "443:443"
@@ -36,9 +37,9 @@ gen-vpc-server() {
     return
   fi
   cat <<EOF
-  dstack-vpc-server:
+  $VPC_SERVER_CONTAINER_NAME:
     image: headscale/headscale@sha256:404e3251f14f080e99093e8855a4a70062271ac7111153eb02a1f879f9f200c8
-    container_name: dstack-vpc-server
+    container_name: $VPC_SERVER_CONTAINER_NAME
     restart: unless-stopped
     ports:
       - "8080:8080"
@@ -50,15 +51,16 @@ gen-vpc-server() {
       test: ["CMD", "headscale", "users", "list"]
     networks:
       - project
-  dstack-vpc-api-server:
-    image: ${DSTACK_CONTAINER_IMAGE_ID}
+  $VPC_API_SERVER_CONTAINER_NAME:
+    image: $DSTACK_CONTAINER_IMAGE_ID
+    container_name: $VPC_API_SERVER_CONTAINER_NAME
     restart: unless-stopped
     environment:
       - ALLOWED_APPS=${DSTACK_VPC_ALLOWED_APPS}
       - PORT=8000
       - GIN_MODE=release
-      - VPC_SERVER_CONTAINER_NAME=dstack-vpc-server
-      - DSTACK_MESH_CONTAINER_NAME=${MESH_CONTAINER_NAME}
+      - VPC_SERVER_CONTAINER_NAME=$VPC_SERVER_CONTAINER_NAME
+      - DSTACK_MESH_CONTAINER_NAME=$MESH_CONTAINER_NAME
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - vpc_api_server_data:/data
@@ -90,8 +92,9 @@ gen-vpc-client() {
         condition: service_healthy
     networks:
       - project
-  dstack-vpc-client:
+  $VPC_CLIENT_CONTAINER_NAME:
     image: tailscale/tailscale@sha256:5bbcf89bb34fd477cae8ff516bddb679023f7322f1e959c0714d07c622444bb4
+    container_name: $VPC_CLIENT_CONTAINER_NAME
     restart: unless-stopped
     cap_add:
       - NET_ADMIN

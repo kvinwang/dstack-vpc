@@ -1,6 +1,6 @@
 #!/bin/bash
 source /scripts/functions.sh
-healthcheck_url "http://127.0.0.1:80/health"
+healthcheck url "http://127.0.0.1:80/health"
 
 source /etc/dstack/env
 
