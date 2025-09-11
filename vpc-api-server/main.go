@@ -298,6 +298,36 @@ func generatePreAuthKey() (string, error) {
 	return keyResp.PreAuthKey.Key, nil
 }
 
+func getOrCreateSharedKey() string {
+	keyPath := "/data/shared_key"
+	
+	// Try to load existing key
+	if keyBytes, err := os.ReadFile(keyPath); err == nil {
+		key := strings.TrimSpace(string(keyBytes))
+		log.Printf("Loaded existing shared key from %s", keyPath)
+		return key
+	}
+	
+	// Generate new key if file doesn't exist
+	keyBytes := make([]byte, 64)
+	rand.Read(keyBytes)
+	sharedKey := base64.StdEncoding.EncodeToString(keyBytes)
+	
+	// Ensure /data directory exists
+	if err := os.MkdirAll("/data", 0755); err != nil {
+		log.Printf("Warning: failed to create /data directory: %v", err)
+	}
+	
+	// Save key to disk
+	if err := os.WriteFile(keyPath, []byte(sharedKey), 0600); err != nil {
+		log.Printf("Warning: failed to save shared key to %s: %v", keyPath, err)
+	} else {
+		log.Printf("Generated and saved new shared key to %s", keyPath)
+	}
+	
+	return sharedKey
+}
+
 func main() {
 	// Initialize global dstackMeshURL
 	dstackMeshURL = os.Getenv("DSTACK_MESH_URL")
@@ -324,9 +354,7 @@ func main() {
 		AllowedNodeTypes: []string{"mongodb", "app"},
 	}
 
-	keyBytes := make([]byte, 64)
-	rand.Read(keyBytes)
-	sharedKey := base64.StdEncoding.EncodeToString(keyBytes)
+	sharedKey := getOrCreateSharedKey()
 
 	ServerUrl := buildHeadscaleURL()
 	log.Printf("Using Headscale URL: %s", ServerUrl)
