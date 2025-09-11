@@ -6,7 +6,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - VPC_NODE_NAME=app-${APP_IND}
+      - VPC_NODE_NAME=app-${NODE_IND}
       - VPC_SERVER_APP_ID=${VPC_SERVER_APP_ID}
   
   app:

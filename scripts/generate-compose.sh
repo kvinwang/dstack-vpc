@@ -26,6 +26,7 @@ gen-dstack-mesh() {
       - DSTACK_MESH_BACKEND=${DSTACK_MESH_BACKEND}
       - DSTACK_VPC_SERVER_API=${DSTACK_VPC_SERVER_API}
       - DSTACK_VPC_SERVER_NAME=${DSTACK_VPC_SERVER_NAME}
+      - RUST_LOG=error
     networks:
       - project
     command: /scripts/mesh-serve.sh

@@ -1,0 +1,10 @@
+services:
+  dstack-service:
+    image: kvin/dstack-service@sha256:b28ba2d4547607188942eaf61735ea82a17a35a1140b8890cfcf9eedee264d42
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - VPC_SERVER_ENABLED=true
+      # TODO: switch to VPC_ALLOWED_APPS=, but currently phala cloud has trouble with upgrading placeholder image
+      - VPC_ALLOWED_APPS=any

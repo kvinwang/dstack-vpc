@@ -6,7 +6,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - VPC_NODE_NAME=mongodb-${MONGO_IND}
+      - VPC_NODE_NAME=mongodb-${NODE_IND}
       - VPC_SERVER_APP_ID=${VPC_SERVER_APP_ID}
   
   mongodb:
@@ -14,7 +14,7 @@ services:
     container_name: mongodb
     restart: unless-stopped
     environment:
-      - NODE_NAME=mongodb-${MONGO_IND}
+      - NODE_NAME=mongodb-${NODE_IND}
     ports:
       - "27017:27017"
     volumes:
