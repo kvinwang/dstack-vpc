@@ -371,48 +371,157 @@ class PhalaDeployer {
   async waitForHealth(appId, name) {
   }
 
-  // Deploy cluster
-  async deployCluster() {
+  // Step 1: Deploy VPC server with dummy container
+  async deployStep1() {
     await this.checkAuth();
     this.loadConfig();
 
-    log.info('Starting MongoDB cluster deployment...\n');
+    log.info('Step 1: Deploying VPC server with dummy container...');
 
     try {
-      // Step 1: Deploy VPC server
-      log.info('Step 1/4: Deploying VPC server...');
-      const vpcServerId = await this.deployVPCServer();
-      console.log();
-
-      await new Promise(resolve => setTimeout(resolve, 10000));
-
-      // Step 2-4: Deploy MongoDB nodes
-      const mongodbAppIds = [];
-      for (let i = 0; i < 3; i++) {
-        log.info(`Step ${i + 2}/4: Deploying MongoDB node ${i}...`);
-        const appId = await this.deployMongoDBNode(i, vpcServerId);
-        mongodbAppIds.push(appId);
-        console.log();
-      }
-
-      // Success summary
-      log.success('✅ MongoDB cluster deployment complete!\n');
-      console.log('Deployment summary:');
-      console.log(`  VPC Server App ID: ${vpcServerId}`);
-      mongodbAppIds.forEach((id, i) => {
-        console.log(`  MongoDB-${i} App ID: ${id}`);
+      const vpcConfig = this.config.vpc_server;
+      const composeFile = path.join(this.scriptDir, 'vpc-server-placeholder.yaml');
+      const appId = await this.deployWithConfig({
+        composeFile,
+        ...vpcConfig
       });
-      console.log('\nDeployment files:');
-      console.log(`  Deployment directories: ${this.deploymentsDir}`);
-      console.log(`  VPC Server ID file: ${this.vpcServerIdFile}`);
-      console.log('  Each deployment has its own isolated .phala/config');
-      console.log('\nMongoDB cluster is ready for connections!');
+
+      // Save VPC server ID for later steps
+      fs.writeFileSync(this.vpcServerIdFile, appId);
+      
+      log.success('Step 1 completed: VPC server deployed with dummy container');
+      log.info(`VPC Server App ID: ${appId}`);
+      
+      return appId;
+    } catch (error) {
+      log.error(`Step 1 failed: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Step 2: Deploy MongoDB nodes
+  async deployStep2() {
+    await this.checkAuth();
+    this.loadConfig();
+
+    log.info('Step 2: Deploying MongoDB nodes...');
+
+    // Check if VPC server exists
+    if (!fs.existsSync(this.vpcServerIdFile)) {
+      log.error('VPC server not found. Please run step 1 first: node deploy.js step1');
+      process.exit(1);
+    }
+
+    const vpcServerId = fs.readFileSync(this.vpcServerIdFile, 'utf8').trim();
+    log.info(`Using VPC Server App ID: ${vpcServerId}`);
+
+    const nodeAppIds = [];
+
+    for (const [index, nodeConfig] of this.config.mongodb_nodes.entries()) {
+      log.info(`Deploying MongoDB node ${index}: ${nodeConfig.name}`);
+      const appId = await this.deployMongoDBNode(index, vpcServerId);
+      nodeAppIds.push(appId);
+    }
+
+    // Save node app IDs for step 3
+    const nodeIdsFile = path.join(this.deploymentsDir, '.mongo_node_ids');
+    fs.writeFileSync(nodeIdsFile, nodeAppIds.join(','));
+
+    log.success('Step 2 completed: All MongoDB nodes deployed');
+    log.info(`MongoDB Node App IDs: ${nodeAppIds.join(', ')}`);
+
+    return nodeAppIds;
+  }
+
+  // Step 3: Redeploy VPC server with correct configuration
+  async deployStep3() {
+    await this.checkAuth();
+    this.loadConfig();
+
+    log.info('Step 3: Redeploying VPC server with correct configuration...');
+
+    // Check if node IDs exist
+    const nodeIdsFile = path.join(this.deploymentsDir, '.mongo_node_ids');
+    if (!fs.existsSync(nodeIdsFile)) {
+      log.error('MongoDB node IDs not found. Please run step 2 first: node deploy.js step2');
+      process.exit(1);
+    }
+
+    const mongoNodeIds = fs.readFileSync(nodeIdsFile, 'utf8').trim().split(',');
+    log.info(`MongoDB Node App IDs: ${mongoNodeIds.join(', ')}`);
+
+    // Get current VPC server app ID
+    if (!fs.existsSync(this.vpcServerIdFile)) {
+      log.error('VPC server not found. Cannot redeploy without existing VPC server.');
+      process.exit(1);
+    }
+
+    const currentVpcAppId = fs.readFileSync(this.vpcServerIdFile, 'utf8').trim();
+    log.info(`Current VPC Server App ID: ${currentVpcAppId}`);
+
+    // Step 3a: Create VPC_ALLOWED_APPS value and upgrade VPC server
+    const allowedApps = mongoNodeIds.join(',');
+
+    // Prepare VPC server deployment directory
+    const vpcDeploymentDir = path.join(this.deploymentsDir, 'mongodb-vpc-server');
+    
+    // Read vpc-server.yaml template and replace VPC_ALLOWED_APPS placeholder
+    const sourceCompose = path.join(this.scriptDir, 'vpc-server.yaml');
+    const targetCompose = path.join(vpcDeploymentDir, 'vpc-server.yaml');
+    
+    let composeContent = fs.readFileSync(sourceCompose, 'utf8');
+    composeContent = composeContent.replace('${VPC_ALLOWED_APPS}', allowedApps);
+    fs.writeFileSync(targetCompose, composeContent);
+
+    log.info('Upgrading VPC server with updated configuration...');
+    log.info(`Setting VPC_ALLOWED_APPS to: ${allowedApps}`);
+    
+    // Use cvms upgrade command (no need to stop first)
+    const originalDir = process.cwd();
+    process.chdir(vpcDeploymentDir);
+    
+    try {
+      const upgradeOutput = await cloudCli('cvms', 'upgrade', currentVpcAppId, 
+        '--compose', 'vpc-server.yaml'
+      );
+      log.info('VPC server upgrade command completed');
+      log.debug(`Upgrade output: ${upgradeOutput}`);
+    } finally {
+      process.chdir(originalDir);
+    }
+
+    const appId = currentVpcAppId; // App ID doesn't change during upgrade
+      
+    log.success('Step 3 completed: VPC server redeployed with correct configuration');
+    log.info(`VPC Server App ID: ${appId}`);
+    log.info(`VPC_ALLOWED_APPS: ${allowedApps}`);
+      
+    return appId;
+  }
+
+  // Deploy entire cluster (all three steps)
+  async deployCluster() {
+    log.info('Starting complete MongoDB cluster deployment...');
+    log.info('This will execute all three steps automatically\n');
+
+    try {
+      // Step 1
+      await this.deployStep1();
+      log.info('');
+
+      // Step 2 
+      await this.deployStep2();
+      log.info('');
+
+      // Step 3
+      await this.deployStep3();
+
+      console.log('\n' + '═'.repeat(80));
+      log.success('🎉 Complete MongoDB cluster deployment finished!');
+      console.log('═'.repeat(80));
 
     } catch (error) {
-      log.error(`Deployment failed: ${error.message}`);
-      if (process.env.DEBUG) {
-        console.error(error.stack);
-      }
+      log.error(`Cluster deployment failed: ${error.message}`);
       process.exit(1);
     }
   }
@@ -804,7 +913,8 @@ class PhalaDeployer {
     }
   }
 
-  // Teardown all deployed CVMs
+
+  // Destroy all deployed CVMs
   async teardown(removeDeploymentDir = false) {
     await this.checkAuth();
     
@@ -869,26 +979,6 @@ class PhalaDeployer {
       const idDisplay = id !== 'unknown' ? `${id.substring(0, 8)}...` : id;
       console.log(`  • ${config.name} (ID: ${idDisplay})`);
     });
-    
-    // Ask for confirmation
-    console.log('\nType "yes" to confirm deletion (Ctrl+C to cancel): ');
-    const readline = require('readline');
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout
-    });
-    
-    const answer = await new Promise(resolve => {
-      rl.question('', (answer) => {
-        rl.close();
-        resolve(answer);
-      });
-    });
-    
-    if (answer.toLowerCase() !== 'yes') {
-      log.info('Teardown cancelled');
-      return;
-    }
     
     console.log('\n🗑️  Starting teardown...\n');
     
@@ -1026,6 +1116,15 @@ async function main() {
   const args = process.argv.slice(3);
 
   switch (command) {
+    case 'step1':
+      await deployer.deployStep1();
+      break;
+    case 'step2':
+      await deployer.deployStep2();
+      break;
+    case 'step3':
+      await deployer.deployStep3();
+      break;
     case 'deploy-cluster':
       await deployer.deployCluster();
       break;
@@ -1048,27 +1147,36 @@ async function main() {
       
       await deployer.showStatus(watchMode, interval);
       break;
-    case 'teardown':
+    case 'down':
       // Check for --rm flag to remove deployment directories
       const removeDeployments = args.includes('--rm');
       await deployer.teardown(removeDeployments);
       break;
     default:
-      console.log('Usage: node deploy-cluster.js {deploy-cluster|deploy-app|status|teardown} [options]');
+      console.log('Usage: node deploy.js {step1|step2|step3|deploy-cluster|deploy-app|status|down} [options]');
+      console.log('\nThree-step workflow:');
+      console.log('  step1                Deploy VPC server with dummy container');
+      console.log('  step2                Deploy MongoDB nodes with VPC server app ID');
+      console.log('  step3                Upgrade VPC server with VPC_ALLOWED_APPS');
       console.log('\nCommands:');
-      console.log('  deploy-cluster       Deploy VPC server and MongoDB cluster (3 nodes)');
+      console.log('  deploy-cluster       Execute all three steps automatically');
       console.log('  deploy-app           Deploy demo application (requires cluster to be deployed first)');
       console.log('  status [options]     Show status of deployed cluster nodes');
       console.log('    --watch, -w        Auto-refresh status in a loop');
       console.log('    --interval, -i <s> Set refresh interval in seconds (default: 5)');
-      console.log('  teardown [options]   Remove all deployed CVMs');
+      console.log('  down [options]       Remove all deployed CVMs');
       console.log('    --rm               Also remove .deployments directory');
       console.log('\nExamples:');
-      console.log('  node deploy-cluster.js status                    # Show status once');
-      console.log('  node deploy-cluster.js status --watch            # Auto-refresh every 5s');
-      console.log('  node deploy-cluster.js status -w --interval 10   # Auto-refresh every 10s');
-      console.log('  node deploy-cluster.js teardown                  # Delete CVMs, keep local files');
-      console.log('  node deploy-cluster.js teardown --rm             # Delete CVMs and local files');
+      console.log('  # Three-step deployment:');
+      console.log('  node deploy.js step1                 # Deploy dummy VPC server');
+      console.log('  node deploy.js step2                 # Deploy MongoDB nodes');
+      console.log('  node deploy.js step3                 # Upgrade VPC server');
+      console.log('');
+      console.log('  # Or deploy everything at once:');
+      console.log('  node deploy.js deploy-cluster        # Execute all steps');
+      console.log('');
+      console.log('  # Monitor deployments:');
+      console.log('  node deploy.js status --watch        # Monitor cluster status');
       console.log('\nEnvironment variables:');
       console.log('  DEBUG=1              Enable debug output');
       process.exit(1);
