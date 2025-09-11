@@ -191,7 +191,16 @@ class PhalaDeployer {
   }
 
   async deployWithConfig(config) {
-    log.info(`Deploying with config: ${JSON.stringify(config, null, 2)}`);
+    const deploymentDir = path.join(this.deploymentsDir, config.name);
+    // if the dir is already exists, skip the deploy
+    if (fs.existsSync(deploymentDir)) {
+      const infoFile = path.join(deploymentDir, 'deployment-info.json');
+      if (fs.existsSync(infoFile)) {
+        const info = JSON.parse(fs.readFileSync(infoFile, 'utf8'));
+        log.info(`Deployment directory already exists for ${config.name}`);
+        return info.app_id;
+      }
+    }
     const nodeId = NODES[config.node];
     if (!nodeId) {
       throw new Error(`Node ID not found for node: ${config.node}`);
@@ -205,7 +214,6 @@ class PhalaDeployer {
     }
 
     // Create isolated deployment directory
-    const deploymentDir = path.join(this.deploymentsDir, config.name);
     if (!fs.existsSync(deploymentDir)) {
       fs.mkdirSync(deploymentDir, { recursive: true });
     }
@@ -520,7 +528,7 @@ class PhalaDeployer {
       log.info('');
 
       // Step 3
-      await this.deployStep3();
+      // await this.deployStep3();
 
       console.log('\n' + '═'.repeat(80));
       log.success('🎉 Complete MongoDB cluster deployment finished!');
@@ -869,7 +877,7 @@ class PhalaDeployer {
 
     // Check if VPC server exists
     if (!fs.existsSync(this.vpcServerIdFile)) {
-      log.error('VPC server ID not found. Please deploy the cluster first using: deploy-cluster');
+      log.error('VPC server ID not found. Please deploy the cluster first using: `node deploy cluster`');
       process.exit(1);
     }
 
@@ -1135,10 +1143,10 @@ async function main() {
     case 'step3':
       await deployer.deployStep3();
       break;
-    case 'deploy-cluster':
+    case 'cluster':
       await deployer.deployCluster();
       break;
-    case 'deploy-app':
+    case 'app':
       await deployer.deployApp();
       break;
     case 'status':
@@ -1163,27 +1171,22 @@ async function main() {
       await deployer.teardown(removeDeployments);
       break;
     default:
-      console.log('Usage: node deploy.js {step1|step2|step3|deploy-cluster|deploy-app|status|down} [options]');
+      console.log('Usage: node deploy.js {step1|step2|step3|cluster|app|status|down} [options]');
       console.log('\nThree-step workflow:');
       console.log('  step1                Deploy VPC server with dummy container');
       console.log('  step2                Deploy MongoDB nodes with VPC server app ID');
       console.log('  step3                Upgrade VPC server with VPC_ALLOWED_APPS');
       console.log('\nCommands:');
-      console.log('  deploy-cluster       Execute all three steps automatically');
-      console.log('  deploy-app           Deploy demo application (requires cluster to be deployed first)');
+      console.log('  cluster       Execute all three steps automatically');
+      console.log('  app           Deploy demo application (requires cluster to be deployed first)');
       console.log('  status [options]     Show status of deployed cluster nodes');
       console.log('    --watch, -w        Auto-refresh status in a loop');
       console.log('    --interval, -i <s> Set refresh interval in seconds (default: 5)');
       console.log('  down [options]       Remove all deployed CVMs');
       console.log('    --rm               Also remove .deployments directory');
       console.log('\nExamples:');
-      console.log('  # Three-step deployment:');
-      console.log('  node deploy.js step1                 # Deploy dummy VPC server');
-      console.log('  node deploy.js step2                 # Deploy MongoDB nodes');
-      console.log('  node deploy.js step3                 # Upgrade VPC server');
-      console.log('');
-      console.log('  # Or deploy everything at once:');
-      console.log('  node deploy.js deploy-cluster        # Execute all steps');
+      console.log('  node deploy.js cluster    # Deploy the mongodb cluster');
+      console.log('  node deploy.js app        # Deploy demo application');
       console.log('');
       console.log('  # Monitor deployments:');
       console.log('  node deploy.js status --watch        # Monitor cluster status');

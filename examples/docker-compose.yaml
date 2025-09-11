@@ -3,7 +3,7 @@ services:
     build: 
       context: ../
       dockerfile: Dockerfile
-    image: kvin/dstack-service@sha256:b28ba2d4547607188942eaf61735ea82a17a35a1140b8890cfcf9eedee264d42
+    image: kvin/dstack-service
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
