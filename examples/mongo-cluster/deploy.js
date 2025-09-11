@@ -34,8 +34,8 @@ const NODES = {
 // Helper function to execute phala CLI commands
 async function cloudCli(...args) {
   const { spawn } = require('child_process');
-  const command = 'node';
-  const fullArgs = ['/home/kvin/codes/dstack-vpc/phala-cloud-cli/dist/index.js', ...args];
+  const command = 'npx';
+  const fullArgs = ['phala', ...args];
 
   log.debug(`Executing: ${command} ${fullArgs.join(' ')}`);
 
@@ -115,6 +115,7 @@ class PhalaDeployer {
       },
       nodes: [
         {
+          index: 0,
           name: "mongodb-0",
           cpu: 2,
           memory: "8G",
@@ -123,6 +124,7 @@ class PhalaDeployer {
           composeFile: "mongodb.yaml"
         },
         {
+          index: 1,
           name: "mongodb-1",
           cpu: 2,
           memory: "8G",
@@ -131,6 +133,7 @@ class PhalaDeployer {
           composeFile: "mongodb.yaml"
         },
         {
+          index: 2,
           name: "mongodb-2",
           cpu: 2,
           memory: "8G",
@@ -344,9 +347,13 @@ class PhalaDeployer {
       fs.mkdirSync(deploymentDir, { recursive: true });
     }
 
+    const nodeInd = nodeConfig.index;
+    if (nodeInd === undefined) {
+      throw new Error(`Node index is not defined for node: ${nodeConfig.name}`);
+    }
     // Write env file directly to deployment directory
     const envFile = path.join(deploymentDir, `.envfile`);
-    const envContent = `NODE_IND=${index}\nVPC_SERVER_APP_ID=${vpcServerId}`;
+    const envContent = `NODE_IND=${nodeInd}\nVPC_SERVER_APP_ID=${vpcServerId}`;
     fs.writeFileSync(envFile, envContent);
 
     try {
