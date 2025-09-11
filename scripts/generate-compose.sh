@@ -13,7 +13,7 @@ gen-dstack-mesh() {
   $MESH_CONTAINER_NAME:
     image: ${DSTACK_CONTAINER_IMAGE_ID}
     container_name: ${MESH_CONTAINER_NAME}
-    restart: unless-stopped
+    restart: on-failure
     ports:
       - "443:443"
     volumes:
@@ -41,12 +41,12 @@ gen-vpc-server() {
   $VPC_SERVER_CONTAINER_NAME:
     image: headscale/headscale@sha256:404e3251f14f080e99093e8855a4a70062271ac7111153eb02a1f879f9f200c8
     container_name: $VPC_SERVER_CONTAINER_NAME
-    restart: unless-stopped
+    restart: on-failure
     ports:
       - "8080:8080"
     volumes:
       - vpc_server_data:/var/lib/headscale
-      - /dstack/.dstack-service/headscale_config.yaml:/etc/headscale/config.yaml
+      - /dstack/.dstack-service/headscale/config.yaml:/etc/headscale/config.yaml
     command: serve
     healthcheck:
       test: ["CMD", "headscale", "users", "list"]
@@ -55,7 +55,7 @@ gen-vpc-server() {
   $VPC_API_SERVER_CONTAINER_NAME:
     image: $DSTACK_CONTAINER_IMAGE_ID
     container_name: $VPC_API_SERVER_CONTAINER_NAME
-    restart: unless-stopped
+    restart: on-failure
     environment:
       - ALLOWED_APPS=${DSTACK_VPC_ALLOWED_APPS}
       - PORT=8000
@@ -96,7 +96,7 @@ gen-vpc-client() {
   $VPC_CLIENT_CONTAINER_NAME:
     image: tailscale/tailscale@sha256:5bbcf89bb34fd477cae8ff516bddb679023f7322f1e959c0714d07c622444bb4
     container_name: $VPC_CLIENT_CONTAINER_NAME
-    restart: unless-stopped
+    restart: on-failure
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
@@ -107,11 +107,11 @@ gen-vpc-client() {
       - vpc_shared:/shared:ro
       - vpc_node_data:/var/lib/tailscale
       - /var/run:/var/run
-      - /dstack/.dstack-service/vpc-node-entry.sh:/vpc-node-entry.sh
+      - /dstack:/dstack
     environment:
       - NODE_NAME=${DSTACK_VPC_NODE_NAME}
       - TUN_DEV_NAME=tailscale1
-    command: /vpc-node-entry.sh
+    command: /dstack/.dstack-service/vpc-node-entry.sh
     healthcheck:
       test: ["CMD", "tailscale", "status"]
     depends_on:

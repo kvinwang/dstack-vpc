@@ -44,8 +44,8 @@ EOF
 cat /etc/dstack/env
 
 docker run --rm --name dstack-copy-files -d -v /dstack:/dstack $DSTACK_CONTAINER_IMAGE_ID \
-    sh -c "mkdir -p /dstack/.dstack-service && tail -f /dev/null"
+    sh -c "mkdir -p /dstack/.dstack-service/headscale && tail -f /dev/null"
 docker cp /etc/dstack/env dstack-copy-files:/dstack/.dstack-service/env
-docker cp /etc/headscale/config.yaml dstack-copy-files:/dstack/.dstack-service/headscale_config.yaml
+docker cp /etc/headscale/config.yaml dstack-copy-files:/dstack/.dstack-service/headscale/config.yaml
 docker cp /scripts/vpc-node-entry.sh dstack-copy-files:/dstack/.dstack-service/vpc-node-entry.sh
 docker rm -f dstack-copy-files
