@@ -247,7 +247,7 @@ class PhalaDeployer {
 
     if (config.envFile) {
       args.push('--env-file', config.envFile);
-      log.debug(`Using env file: ${config.envFile}`);
+      log.info(`Using env file: ${config.envFile}`);
     }
 
     try {
