@@ -1,6 +1,6 @@
 #!/bin/bash
 
-IMAGE_NAME="kvin/dstack-mesh"
+IMAGE_NAME="kvin/dstack-service"
 PUSH_IMAGE=false
 
 while [[ $# -gt 0 ]]; do
@@ -22,7 +22,7 @@ done
 
 THIS_DIR=$(cd "$(dirname "$0")" && pwd)
 
-docker build -t "$IMAGE_NAME" "$THIS_DIR"
+docker build "$THIS_DIR" -t "$IMAGE_NAME"
 
 if [ "$PUSH_IMAGE" = true ]; then
     echo "Pushing image to Docker Hub..."

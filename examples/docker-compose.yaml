@@ -1,0 +1,52 @@
+services:
+  dstack-service:
+    build: 
+      context: ../
+      dockerfile: Dockerfile
+    image: kvin/dstack-service
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - LOAD_MISSING_MODULES=true
+      - MESH_BACKEND=backend-app:8080
+      - VPC_SERVER_ENABLED=true
+      - VPC_ALLOWED_APPS=any
+      - VPC_NODE_NAME=test-node
+      - VPC_SERVER_APP_ID=${VPC_SERVER_APP_ID:-self}
+
+  backend-app:
+    image: node:18-alpine@sha256:8d6421d663b4c28fd3ebc498332f249011d118945588d0a35cb9bc4b8ca09d9e
+    container_name: backend-app
+    restart: unless-stopped
+    command: >
+      node -e "
+      const http = require('http');
+      const server = http.createServer((req, res) => {
+        const appId = req.headers['x-dstack-app-id'] || 'unknown';
+        const message = `Your app_id is: $${appId}`;
+        res.writeHead(200, {'Content-Type': 'text/plain'});
+        console.log(message);
+        res.end(message);
+      });
+      server.listen(8080, '0.0.0.0');
+      "
+
+  test-client:
+    image: alpine@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
+    container_name: test-client
+    depends_on:
+      dstack-service:
+        condition: service_healthy
+      backend-app:
+        condition: service_started
+    command: |
+      sh -c '
+        apk add --no-cache curl jq
+        APP_ID=$$(curl -s http://dstack-service/info | jq -r .app_id)
+        echo "My App ID: $$APP_ID"
+        curl -v -H "x-dstack-target-app: $$APP_ID" "http://dstack-service/hello"
+        echo ""
+        echo "Client tests completed..."
+        tail -f /dev/null
+      '
