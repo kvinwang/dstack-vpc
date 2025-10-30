@@ -1,6 +1,6 @@
 services:
   dstack-service:
-    build: 
+    build:
       context: ../
       dockerfile: Dockerfile
     image: kvin/dstack-service
