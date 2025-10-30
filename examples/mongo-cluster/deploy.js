@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-const { execSync, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -46,8 +45,8 @@ const NODE_TO_KMS = {
 // Helper function to execute phala CLI commands
 async function cloudCli(...args) {
   const { spawn } = require('child_process');
-  const command = 'npx';
-  const fullArgs = ['phala', ...args];
+  const command = 'phala';
+  const fullArgs = [...args];
 
   log.debug(`Executing: ${command} ${fullArgs.join(' ')}`);
 
@@ -173,11 +172,11 @@ class PhalaDeployer {
   async checkAuth() {
     try {
       log.info('Checking authentication status...');
-      cloudCli('auth status');
+      await cloudCli('auth', 'status');
       log.success('Authentication verified ✓');
     } catch (error) {
       log.error('Not authenticated with Phala Network');
-      log.info('Please run: npx phala auth login');
+      log.info('Please run: phala auth login');
       process.exit(1);
     }
   }
