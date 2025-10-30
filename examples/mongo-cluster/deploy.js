@@ -28,7 +28,19 @@ const log = {
 };
 
 const NODES = {
-  "prod6-eth": "11",
+  "prod6": "11",
+  "prod7": "12",
+  "prod8": "16",
+  "prod9": "18",
+  "prod10": "17",
+}
+
+const NODE_TO_KMS = {
+  "prod6": "phala-prod6",
+  "prod7": "phala-prod7",
+  "prod8": "phala-prod8",
+  "prod9": "phala-prod9",
+  "prod10": "phala-prod10",
 }
 
 // Helper function to execute phala CLI commands
@@ -103,14 +115,13 @@ class PhalaDeployer {
   // Generate default configuration
   generateDefaultConfig() {
     const defaultConfig = {
-      kms: "kms_dA2M76mq",
       os_image: "dstack-dev-0.5.4",
       vpc_server: {
         name: "mongodb-vpc-server",
         cpu: 1,
         memory: "2G",
         storage: "20G",
-        node: "prod6-eth",
+        node: "prod9",
         composeFile: "vpc-server.yaml"
       },
       nodes: [
@@ -120,7 +131,7 @@ class PhalaDeployer {
           cpu: 2,
           memory: "8G",
           storage: "200G",
-          node: "prod6-eth",
+          node: "prod9",
           composeFile: "mongodb.yaml"
         },
         {
@@ -129,7 +140,7 @@ class PhalaDeployer {
           cpu: 2,
           memory: "8G",
           storage: "200G",
-          node: "prod6-eth",
+          node: "prod9",
           composeFile: "mongodb.yaml"
         },
         {
@@ -138,7 +149,7 @@ class PhalaDeployer {
           cpu: 2,
           memory: "8G",
           storage: "200G",
-          node: "prod6-eth",
+          node: "prod9",
           composeFile: "mongodb.yaml"
         }
       ],
@@ -147,7 +158,7 @@ class PhalaDeployer {
         cpu: 1,
         memory: "2G",
         storage: "20G",
-        node: "prod6-eth",
+        node: "prod9",
         composeFile: "mongo-app.yaml"
       }
     };
@@ -205,13 +216,14 @@ class PhalaDeployer {
       }
     }
     const nodeId = NODES[config.node];
+    const kms = NODE_TO_KMS[config.node];
     if (!nodeId) {
       throw new Error(`Node ID not found for node: ${config.node}`);
     }
-    // Validate configuration
-    if (!this.config.kms) {
-      throw new Error('KMS ID is not configured');
+    if (!kms) {
+      throw new Error(`KMS ID not found for node: ${config.node}`);
     }
+
     if (!this.config.os_image) {
       throw new Error('OS image is not configured');
     }
@@ -225,7 +237,7 @@ class PhalaDeployer {
     log.debug('Deployment parameters:');
     log.debug(`  Name: ${config.name}, vCPU: ${config.cpu}, Memory: ${config.memory}`);
     log.debug(`  Disk: ${config.storage}, Node: ${config.node} (ID: ${nodeId})`);
-    log.debug(`  KMS: ${this.config.kms}, Image: ${this.config.os_image}`);
+    log.debug(`  KMS: ${kms}, Image: ${this.config.os_image}`);
 
     if (!config.composeFile.startsWith('/')) {
       config.composeFile = path.join(this.scriptDir, config.composeFile);
@@ -241,7 +253,7 @@ class PhalaDeployer {
       '--memory', config.memory,
       '--disk-size', config.storage,
       '--node-id', nodeId,
-      '--kms-id', this.config.kms,
+      '--kms-id', kms,
       '--image', this.config.os_image
     ];
 
@@ -601,40 +613,23 @@ class PhalaDeployer {
           log.info('Fetching CVM status from Phala Cloud...');
         }
 
-        // Get all CVMs from Phala Cloud
-        const output = await cloudCli('cvms', 'list', '--json');
-
-        // Extract JSON from mixed output
-        let allCvms;
-        try {
-          allCvms = JSON.parse(output);
-        } catch (parseError) {
-          const startIndex = output.indexOf('[');
-          if (startIndex !== -1) {
-            const jsonPart = output.substring(startIndex);
-            try {
-              allCvms = JSON.parse(jsonPart);
-            } catch (e) {
-              throw new Error(`Failed to parse JSON from CLI output: ${output.slice(0, 200)}...`);
-            }
-          } else {
-            throw new Error(`No JSON array found in CLI output: ${output.slice(0, 200)}...`);
-          }
-        }
-
         // Match deployment configs with CVMs
         const matchedCvms = [];
         for (const config of deploymentConfigs) {
-          const cvm = allCvms.find(c => c.hosted.id === config.uuid);
-          if (cvm) {
-            matchedCvms.push({
-              ...cvm,
-              deploymentName: config.name,
-              configPath: config.configPath
-            });
-          } else {
-            log.warn(`CVM not found for deployment ${config.name} (UUID: ${config.uuid})`);
+          const output = await cloudCli('cvms', 'get', config.uuid, '--json');
+          if (output) {
+            try {
+              const parsed = JSON.parse(output);
+              matchedCvms.push({
+                ...parsed,
+                deploymentName: config.name,
+                configPath: config.configPath
+              })
+              continue
+            } catch (e) {
+            }
           }
+          log.warn(`CVM not found for deployment ${config.name} (UUID: ${config.uuid})`);
         }
 
         if (matchedCvms.length === 0) {
@@ -683,7 +678,7 @@ class PhalaDeployer {
         // Summary
         console.log('═'.repeat(80));
         const totalNodes = matchedCvms.length;
-        const runningNodes = matchedCvms.filter(cvm => cvm.hosted.status === 'running').length;
+        const runningNodes = matchedCvms.filter(cvm => cvm.status === 'running').length;
         console.log(`📈 Summary: ${runningNodes}/${totalNodes} nodes running`);
 
         if (runningNodes === totalNodes) {
@@ -693,6 +688,7 @@ class PhalaDeployer {
         }
 
       } catch (error) {
+        console.error(error)
         log.error(`Failed to fetch cluster status: ${error.message}`);
       }
     };
@@ -717,30 +713,26 @@ class PhalaDeployer {
 
   // Helper function to display CVM with health check
   async displayCVMWithHealth(cvm) {
-    const statusIcon = cvm.hosted.status === 'running' ? '✅' :
-      cvm.hosted.status === 'stopped' ? '🔴' : '⚠️';
+    const statusIcon = cvm.status === 'running' ? '✅' :
+      cvm.status === 'stopped' ? '🔴' : '⚠️';
 
     const name = cvm.deploymentName.padEnd(25);
-    const status = cvm.hosted.status.padEnd(10);
-    const uptime = cvm.hosted.uptime || 'N/A';
-    const appId = cvm.hosted.id.substring(0, 8) + '...';
+    const status = cvm.status.padEnd(10);
+    const uptime = cvm.hosted?.uptime || 'N/A';
+    const appId = cvm.app_id.substring(0, 8) + '...';
 
     // Basic info line
     console.log(`  ${statusIcon} ${name} │ ${status} │ ${uptime.padEnd(12)} │ ${appId}`);
 
     // Display URLs
-    if (cvm.hosted.app_url) {
-      console.log(`     └─ 🔗 ${cvm.hosted.app_url}`);
-    }
-
-    if (cvm.dapp_dashboard_url && cvm.hosted.status === 'running') {
+    if (cvm.dapp_dashboard_url && cvm.status === 'running') {
       console.log(`     └─ 📊 Dashboard: ${cvm.dapp_dashboard_url}`);
     }
 
     // Health check if running
-    if (cvm.hosted.status === 'running' && cvm.hosted.app_url) {
+    if (cvm.status === 'running' && cvm.dapp_dashboard_url) {
       try {
-        const healthStatus = await this.checkCVMHealth(cvm.hosted.app_url);
+        const healthStatus = await this.checkCVMHealth(cvm.dapp_dashboard_url);
 
         if (healthStatus.containers && healthStatus.containers.length > 0) {
           console.log(`     └─ 📦 Containers:`);
