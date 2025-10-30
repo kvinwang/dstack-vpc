@@ -5,6 +5,7 @@ Spin up a MongoDB replica set inside a DStack VPC using the Phala Cloud CLI.
 ## Prerequisites
 
 - Phala Cloud account at <https://cloud.phala.network/>
+- Nodejs v20 (Tested with v20.19.5, other versions may work)
 - Phala Cloud CLI installed:
 
   ```bash
