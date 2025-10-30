@@ -173,7 +173,7 @@ class PhalaDeployer {
   async checkAuth() {
     try {
       log.info('Checking authentication status...');
-      execSync('npx phala auth status', { stdio: 'pipe' });
+      cloudCli('auth status');
       log.success('Authentication verified ✓');
     } catch (error) {
       log.error('Not authenticated with Phala Network');
