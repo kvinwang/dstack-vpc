@@ -1,4 +1,3 @@
-// Colors for output
 const colors = {
   reset: '\x1b[0m',
   red: '\x1b[31m',
@@ -8,7 +7,6 @@ const colors = {
   cyan: '\x1b[36m'
 };
 
-// Logging functions
 const log = {
   info: (msg) => console.log(`${colors.blue}[INFO]${colors.reset} ${msg}`),
   error: (msg) => console.log(`${colors.red}[ERROR]${colors.reset} ${msg}`),
@@ -21,7 +19,6 @@ const log = {
   }
 };
 
-// Execute phala CLI commands
 async function cloudCli(...args) {
   const { spawn } = require('child_process');
   const command = 'phala';
@@ -59,7 +56,6 @@ async function cloudCli(...args) {
   });
 }
 
-// Ensure directory exists (creates if missing)
 function ensureDir(dirPath) {
   const fs = require('fs');
   if (!fs.existsSync(dirPath)) {
@@ -67,7 +63,6 @@ function ensureDir(dirPath) {
   }
 }
 
-// Read JSON file safely
 function readJsonFile(filePath) {
   const fs = require('fs');
   if (!fs.existsSync(filePath)) {
@@ -82,13 +77,11 @@ function readJsonFile(filePath) {
   }
 }
 
-// Write JSON file safely
 function writeJsonFile(filePath, data) {
   const fs = require('fs');
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
 }
 
-// Extract JSON from CLI output (handles mixed output with status messages)
 function extractJsonFromCliOutput(output) {
   const jsonStart = output.indexOf('{');
   const jsonEnd = output.lastIndexOf('}');
@@ -101,7 +94,92 @@ function extractJsonFromCliOutput(output) {
   return JSON.parse(jsonString);
 }
 
-// Format CVM with health check (returns array of strings)
+function extractJsonArrayFromCliOutput(output) {
+  try {
+    return JSON.parse(output);
+  } catch (parseError) {
+    const startIndex = output.indexOf('[');
+    if (startIndex !== -1) {
+      const jsonPart = output.substring(startIndex);
+      return JSON.parse(jsonPart);
+    }
+    throw new Error('Failed to parse JSON array from CLI output');
+  }
+}
+
+function renderFile(srcFile, dstFile, variables = {}) {
+  const fs = require('fs');
+  let content = fs.readFileSync(srcFile, 'utf8');
+
+  for (const [key, value] of Object.entries(variables)) {
+    const pattern = new RegExp(`\\$\\{${key}\\}`, 'g');
+    content = content.replace(pattern, value);
+  }
+
+  fs.writeFileSync(dstFile, content);
+}
+
+function renderCompose(srcFile, deploymentDir, variables = {}) {
+  const path = require('path');
+  const dstFile = path.join(deploymentDir, "docker-compose.yml");
+  renderFile(srcFile, dstFile, variables);
+  return dstFile;
+}
+
+function renderClusterStatus(statusData) {
+  if (statusData.isEmpty) {
+    if (statusData.reason === 'no_cvms') {
+      return 'No matching CVMs found';
+    }
+    return 'No deployment configurations found';
+  }
+
+  const lines = [];
+
+  lines.push('\n📊 MongoDB Cluster Status\n');
+  lines.push('═'.repeat(80));
+
+  // Display VPC Server
+  if (statusData.vpcServer) {
+    lines.push('🌐 VPC Server:');
+    lines.push(...formatCVMWithHealth(
+      statusData.vpcServer,
+      statusData.healthMap.get(statusData.vpcServer.deploymentName)
+    ));
+    lines.push('');
+  }
+
+  // Display MongoDB Nodes
+  if (statusData.mongoNodes.length > 0) {
+    lines.push('🗄️  MongoDB Cluster Nodes:');
+    for (const cvm of statusData.mongoNodes) {
+      lines.push(...formatCVMWithHealth(cvm, statusData.healthMap.get(cvm.deploymentName)));
+    }
+    lines.push('');
+  }
+
+  // Display Demo Apps
+  if (statusData.demoApps.length > 0) {
+    lines.push('🚀 Demo Applications:');
+    for (const cvm of statusData.demoApps) {
+      lines.push(...formatCVMWithHealth(cvm, statusData.healthMap.get(cvm.deploymentName)));
+    }
+    lines.push('');
+  }
+
+  // Summary
+  lines.push('═'.repeat(80));
+  lines.push(`📈 Summary: ${statusData.summary.running}/${statusData.summary.total} nodes running`);
+
+  if (statusData.summary.allHealthy) {
+    lines.push('✅ All cluster nodes are healthy!');
+  } else {
+    lines.push('⚠️  Some nodes need attention');
+  }
+
+  return lines.join('\n');
+}
+
 function formatCVMWithHealth(cvm, healthStatus) {
   const lines = [];
   const statusIcon = cvm.status === 'running' ? '✅' :
@@ -112,15 +190,12 @@ function formatCVMWithHealth(cvm, healthStatus) {
   const uptime = cvm.hosted?.uptime || 'N/A';
   const appId = cvm.app_id.substring(0, 8) + '...';
 
-  // Basic info line
   lines.push(`  ${statusIcon} ${name} │ ${status} │ ${uptime.padEnd(12)} │ ${appId}`);
 
-  // Display URLs
   if (cvm.dapp_dashboard_url && cvm.status === 'running') {
     lines.push(`     └─ 📊 Dashboard: ${cvm.dapp_dashboard_url}`);
   }
 
-  // Health check if running
   if (cvm.status === 'running' && healthStatus) {
     if (healthStatus.containers && healthStatus.containers.length > 0) {
       lines.push(`     └─ 📦 Containers:`);
@@ -140,65 +215,21 @@ function formatCVMWithHealth(cvm, healthStatus) {
   return lines;
 }
 
-// Display CVM with health check (legacy method for compatibility)
-async function displayCVMWithHealth(cvm, checkHealthFunc) {
-  const statusIcon = cvm.status === 'running' ? '✅' :
-    cvm.status === 'stopped' ? '🔴' : '⚠️';
-
-  const name = cvm.deploymentName.padEnd(25);
-  const status = cvm.status.padEnd(10);
-  const uptime = cvm.hosted?.uptime || 'N/A';
-  const appId = cvm.app_id.substring(0, 8) + '...';
-
-  // Basic info line
-  console.log(`  ${statusIcon} ${name} │ ${status} │ ${uptime.padEnd(12)} │ ${appId}`);
-
-  // Display URLs
-  if (cvm.dapp_dashboard_url && cvm.status === 'running') {
-    console.log(`     └─ 📊 Dashboard: ${cvm.dapp_dashboard_url}`);
-  }
-
-  // Health check if running
-  if (cvm.status === 'running' && cvm.dapp_dashboard_url && checkHealthFunc) {
-    try {
-      const healthStatus = await checkHealthFunc(cvm.dapp_dashboard_url);
-
-      if (healthStatus.containers && healthStatus.containers.length > 0) {
-        console.log(`     └─ 📦 Containers:`);
-        healthStatus.containers.forEach(container => {
-          const nameFormatted = container.name.padEnd(30);
-          console.log(`        ${container.statusIcon} ${nameFormatted} │ ${container.status}`);
-        });
-      } else {
-        if (healthStatus.success) {
-          console.log(`     └─ 💚 Health: ${healthStatus.message}`);
-        } else {
-          console.log(`     └─ 💔 Health: ${healthStatus.message}`);
-        }
-      }
-    } catch (error) {
-      console.log(`     └─ ⚠️  Health check failed: ${error.message}`);
-    }
-  }
-}
-
-// Check CVM health via HTTP request
 async function checkCVMHealth(url) {
   const https = require('https');
-  const http = require('http');
 
   return new Promise((resolve) => {
-    const urlObj = new URL(url.replace('dstack-eth-prod6.phala.network', 'dstack-pha-prod6.phala.network'));
+    const urlObj = new URL(url);
     const options = {
       hostname: urlObj.hostname,
       port: urlObj.port,
-      path: '/', // Get the main dashboard page
+      path: '/',
       method: 'GET',
       timeout: 10000,
       rejectUnauthorized: false
     };
 
-    const client = urlObj.protocol === 'https:' ? https : http;
+    const client = https;
 
     const req = client.request(options, (res) => {
       let data = '';
@@ -209,7 +240,6 @@ async function checkCVMHealth(url) {
 
       res.on('end', () => {
         if (res.statusCode === 200) {
-          // Parse HTML to extract container status
           const containerStatus = parseContainerStatus(data);
           resolve(containerStatus);
         } else {
@@ -231,10 +261,8 @@ async function checkCVMHealth(url) {
   });
 }
 
-// Parse HTML to extract container health status
 function parseContainerStatus(html) {
   try {
-    // Extract container rows from the table
     const tableRegex = /<tbody>(.*?)<\/tbody>/s;
     const tableMatch = html.match(tableRegex);
 
@@ -251,7 +279,6 @@ function parseContainerStatus(html) {
       const name = match[1].trim();
       const status = match[2].trim();
 
-      // Determine container health
       let isHealthy = false;
       let statusIcon = '🔴';
 
@@ -260,10 +287,9 @@ function parseContainerStatus(html) {
           isHealthy = true;
           statusIcon = '💚';
         } else {
-          statusIcon = '🟡'; // Up but not explicitly healthy
+          statusIcon = '🟡';
         }
       } else if (status.includes('Exited (0)')) {
-        // Exited with success code (like setup containers)
         statusIcon = '✅';
         isHealthy = true;
       }
@@ -280,7 +306,6 @@ function parseContainerStatus(html) {
       return { success: false, message: 'No containers found', containers: [] };
     }
 
-    // Overall health assessment
     const healthyCount = containers.filter(c => c.isHealthy).length;
     const upCount = containers.filter(c => c.status.includes('Up')).length;
     const totalCount = containers.length;
@@ -306,8 +331,11 @@ module.exports = {
   readJsonFile,
   writeJsonFile,
   extractJsonFromCliOutput,
+  extractJsonArrayFromCliOutput,
+  renderFile,
+  renderCompose,
+  renderClusterStatus,
   formatCVMWithHealth,
-  displayCVMWithHealth,
   checkCVMHealth,
   parseContainerStatus
 };
