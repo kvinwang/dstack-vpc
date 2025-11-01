@@ -578,13 +578,8 @@ class PhalaDeployer {
     await this.checkAuth();
 
     const showStatusOnce = async () => {
-      // Clear screen if in watch mode
-      if (watch) {
-        console.clear();
-        const now = new Date().toLocaleTimeString();
-        console.log(`🔄 Auto-refreshing every ${interval / 1000}s | Last update: ${now}`);
-        console.log('   Press Ctrl+C to stop\n');
-      }
+      // Buffer output to prevent flickering in watch mode
+      const output = [];
 
       try {
         if (!watch) {
@@ -615,10 +610,18 @@ class PhalaDeployer {
         }
 
         if (deploymentConfigs.length === 0) {
-          if (!watch) {
-            log.info('No deployment configurations found');
+          if (watch) {
+            output.push('No deployment configurations found');
           } else {
-            console.log('No deployment configurations found');
+            log.info('No deployment configurations found');
+          }
+          // Print buffered output in watch mode
+          if (watch) {
+            console.clear();
+            const now = new Date().toLocaleTimeString();
+            console.log(`🔄 Auto-refreshing every ${interval / 1000}s | Last update: ${now}`);
+            console.log('   Press Ctrl+C to stop\n');
+            console.log(output.join('\n'));
           }
           return;
         }
@@ -627,38 +630,47 @@ class PhalaDeployer {
           log.info('Fetching CVM status from Phala Cloud...');
         }
 
-        // Match deployment configs with CVMs
+        // Match deployment configs with CVMs (fetch all data first)
         const matchedCvms = [];
         for (const config of deploymentConfigs) {
           try {
-            const output = await cloudCli('cvms', 'get', config.app_id, '--json');
-            log.debug(`Got output for ${config.name}: ${output ? output.substring(0, 100) : 'empty'}`);
+            const cliOutput = await cloudCli('cvms', 'get', config.app_id, '--json');
+            log.debug(`Got output for ${config.name}: ${cliOutput ? cliOutput.substring(0, 100) : 'empty'}`);
 
-            if (output) {
+            if (cliOutput) {
               try {
-                const parsed = this.extractJsonFromCliOutput(output);
+                const parsed = this.extractJsonFromCliOutput(cliOutput);
                 matchedCvms.push({
                   ...parsed,
                   deploymentName: config.name
                 })
               } catch (e) {
-                log.warn(`Failed to parse JSON for ${config.name}: ${e.message}`);
+                if (!watch) log.warn(`Failed to parse JSON for ${config.name}: ${e.message}`);
               }
             } else {
-              log.warn(`Empty output for ${config.name}`);
+              if (!watch) log.warn(`Empty output for ${config.name}`);
             }
           } catch (error) {
-            log.warn(`Failed to fetch CVM for ${config.name}: ${error.message}`);
+            if (!watch) log.warn(`Failed to fetch CVM for ${config.name}: ${error.message}`);
           }
         }
 
         if (matchedCvms.length === 0) {
-          log.info('No matching CVMs found');
+          if (watch) {
+            output.push('No matching CVMs found');
+          } else {
+            log.info('No matching CVMs found');
+          }
+          // Print buffered output in watch mode
+          if (watch) {
+            console.clear();
+            const now = new Date().toLocaleTimeString();
+            console.log(`🔄 Auto-refreshing every ${interval / 1000}s | Last update: ${now}`);
+            console.log('   Press Ctrl+C to stop\n');
+            console.log(output.join('\n'));
+          }
           return;
         }
-
-        console.log('\n📊 MongoDB Cluster Status\n');
-        console.log('═'.repeat(80));
 
         // Categorize by deployment name patterns
         const vpcServer = matchedCvms.find(cvm => cvm.deploymentName.includes('vpc-server'));
@@ -670,41 +682,64 @@ class PhalaDeployer {
           (cvm.deploymentName.includes('mongodb') && !cvm.deploymentName.match(/^mongodb-[0-9]+$/) && !cvm.deploymentName.includes('vpc-server'))
         );
 
+        // Fetch all health data BEFORE displaying anything
+        const healthData = new Map();
+        for (const cvm of matchedCvms) {
+          if (cvm.status === 'running' && cvm.dapp_dashboard_url) {
+            healthData.set(cvm.deploymentName, await this.checkCVMHealth(cvm.dapp_dashboard_url));
+          }
+        }
+
+        // Now build the output (all data is ready)
+        output.push('\n📊 MongoDB Cluster Status\n');
+        output.push('═'.repeat(80));
+
         // Display VPC Server
         if (vpcServer) {
-          console.log('🌐 VPC Server:');
-          await this.displayCVMWithHealth(vpcServer);
-          console.log('');
+          output.push('🌐 VPC Server:');
+          output.push(...this.formatCVMWithHealth(vpcServer, healthData.get(vpcServer.deploymentName)));
+          output.push('');
         }
 
         // Display MongoDB Nodes
         if (mongoNodes.length > 0) {
-          console.log('🗄️  MongoDB Cluster Nodes:');
+          output.push('🗄️  MongoDB Cluster Nodes:');
           for (const cvm of mongoNodes) {
-            await this.displayCVMWithHealth(cvm);
+            output.push(...this.formatCVMWithHealth(cvm, healthData.get(cvm.deploymentName)));
           }
-          console.log('');
+          output.push('');
         }
 
         // Display Demo Apps
         if (demoApps.length > 0) {
-          console.log('🚀 Demo Applications:');
+          output.push('🚀 Demo Applications:');
           for (const cvm of demoApps) {
-            await this.displayCVMWithHealth(cvm);
+            output.push(...this.formatCVMWithHealth(cvm, healthData.get(cvm.deploymentName)));
           }
-          console.log('');
+          output.push('');
         }
 
         // Summary
-        console.log('═'.repeat(80));
+        output.push('═'.repeat(80));
         const totalNodes = matchedCvms.length;
         const runningNodes = matchedCvms.filter(cvm => cvm.status === 'running').length;
-        console.log(`📈 Summary: ${runningNodes}/${totalNodes} nodes running`);
+        output.push(`📈 Summary: ${runningNodes}/${totalNodes} nodes running`);
 
         if (runningNodes === totalNodes) {
-          console.log('✅ All cluster nodes are healthy!');
+          output.push('✅ All cluster nodes are healthy!');
         } else {
-          console.log('⚠️  Some nodes need attention');
+          output.push('⚠️  Some nodes need attention');
+        }
+
+        // Clear screen and print everything atomically in watch mode
+        if (watch) {
+          console.clear();
+          const now = new Date().toLocaleTimeString();
+          console.log(`🔄 Auto-refreshing every ${interval / 1000}s | Last update: ${now}`);
+          console.log('   Press Ctrl+C to stop\n');
+          console.log(output.join('\n'));
+        } else {
+          console.log(output.join('\n'));
         }
 
       } catch (error) {
@@ -729,6 +764,45 @@ class PhalaDeployer {
         await new Promise(resolve => setTimeout(resolve, interval));
       }
     }
+  }
+
+  // Helper function to format CVM with health check (returns array of strings)
+  formatCVMWithHealth(cvm, healthStatus) {
+    const lines = [];
+    const statusIcon = cvm.status === 'running' ? '✅' :
+      cvm.status === 'stopped' ? '🔴' : '⚠️';
+
+    const name = cvm.deploymentName.padEnd(25);
+    const status = cvm.status.padEnd(10);
+    const uptime = cvm.hosted?.uptime || 'N/A';
+    const appId = cvm.app_id.substring(0, 8) + '...';
+
+    // Basic info line
+    lines.push(`  ${statusIcon} ${name} │ ${status} │ ${uptime.padEnd(12)} │ ${appId}`);
+
+    // Display URLs
+    if (cvm.dapp_dashboard_url && cvm.status === 'running') {
+      lines.push(`     └─ 📊 Dashboard: ${cvm.dapp_dashboard_url}`);
+    }
+
+    // Health check if running
+    if (cvm.status === 'running' && healthStatus) {
+      if (healthStatus.containers && healthStatus.containers.length > 0) {
+        lines.push(`     └─ 📦 Containers:`);
+        healthStatus.containers.forEach(container => {
+          const nameFormatted = container.name.padEnd(30);
+          lines.push(`        ${container.statusIcon} ${nameFormatted} │ ${container.status}`);
+        });
+      } else {
+        if (healthStatus.success) {
+          lines.push(`     └─ 💚 Health: ${healthStatus.message}`);
+        } else {
+          lines.push(`     └─ 💔 Health: ${healthStatus.message}`);
+        }
+      }
+    }
+
+    return lines;
   }
 
   // Helper function to display CVM with health check
