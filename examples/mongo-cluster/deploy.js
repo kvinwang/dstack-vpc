@@ -68,7 +68,7 @@ async function cloudCli(...args) {
 
     proc.on('close', (code) => {
       if (code !== 0) {
-        reject(new Error(`Command failed with exit code ${code}\n${errorOutput}`));
+        reject(new Error(`Command failed with exit code ${code}\n${errorOutput}\nCommand line: ${command} ${fullArgs.join(' ')}`));
       } else {
         resolve(output.trim());
       }
@@ -94,6 +94,44 @@ class PhalaDeployer {
     }
   }
 
+  // Simple state helpers - single source of truth
+  getDeploymentState(name) {
+    const stateFile = path.join(this.deploymentsDir, name, 'deployment-info.json');
+    if (!fs.existsSync(stateFile)) {
+      return null;
+    }
+    try {
+      const content = fs.readFileSync(stateFile, 'utf8');
+      return JSON.parse(content);
+    } catch (error) {
+      log.warn(`Failed to read state for ${name}: ${error.message}`);
+      return null; // Treat corrupted state as not deployed
+    }
+  }
+
+  saveDeploymentState(name, state) {
+    const deploymentDir = path.join(this.deploymentsDir, name);
+    if (!fs.existsSync(deploymentDir)) {
+      fs.mkdirSync(deploymentDir, { recursive: true });
+    }
+    const stateFile = path.join(deploymentDir, 'deployment-info.json');
+    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+    log.debug(`Saved state for ${name}`);
+  }
+
+  // Extract JSON from CLI output (handles mixed output with status messages)
+  // TODO: remove this once the CLI can stably output pure json file
+  extractJsonFromCliOutput(output) {
+    const jsonStart = output.indexOf('{');
+    const jsonEnd = output.lastIndexOf('}');
+
+    if (jsonStart === -1 || jsonEnd === -1) {
+      throw new Error(`No JSON found in output: ${output.substring(0, 100)}...`);
+    }
+
+    const jsonString = output.substring(jsonStart, jsonEnd + 1);
+    return JSON.parse(jsonString);
+  }
 
   // Load configuration
   loadConfig() {
@@ -204,16 +242,14 @@ class PhalaDeployer {
   }
 
   async deployWithConfig(config) {
-    const deploymentDir = path.join(this.deploymentsDir, config.name);
-    // if the dir is already exists, skip the deploy
-    if (fs.existsSync(deploymentDir)) {
-      const infoFile = path.join(deploymentDir, 'deployment-info.json');
-      if (fs.existsSync(infoFile)) {
-        const info = JSON.parse(fs.readFileSync(infoFile, 'utf8'));
-        log.info(`Deployment directory already exists for ${config.name}`);
-        return info.app_id;
-      }
+    // Check if already deployed (idempotent)
+    const existingState = this.getDeploymentState(config.name);
+    if (existingState && existingState.app_id) {
+      log.info(`${config.name} already deployed with App ID: ${existingState.app_id}`);
+      return existingState.app_id;
     }
+
+    const deploymentDir = path.join(this.deploymentsDir, config.name);
     const nodeId = NODES[config.node];
     const kms = NODE_TO_KMS[config.node];
     if (!nodeId) {
@@ -261,46 +297,20 @@ class PhalaDeployer {
       log.info(`Using env file: ${config.envFile}`);
     }
 
+    // Save "deploying" state BEFORE calling CLI (protects against CLI failure)
+    this.saveDeploymentState(config.name, {
+      name: config.name,
+      status: 'deploying',
+      app_id: null,
+      vm_uuid: null,
+      started_at: new Date().toISOString()
+    });
+
     try {
       const output = await this.executeDeploy(args, deploymentDir);
 
-      // Extract JSON from mixed output
-      let jsonResult;
-      try {
-        // Try to parse the entire output as JSON first
-        jsonResult = JSON.parse(output);
-      } catch (parseError) {
-        // If that fails, look for JSON in the output
-        const lines = output.split('\n');
-
-        // Look for a line that starts with { and ends with }
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-            try {
-              jsonResult = JSON.parse(trimmed);
-              break;
-            } catch (e) {
-              continue;
-            }
-          }
-        }
-
-        // If still no JSON found, try to find JSON block
-        if (!jsonResult) {
-          const jsonMatch = output.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            try {
-              jsonResult = JSON.parse(jsonMatch[0]);
-            } catch (e) {
-              throw new Error(`Failed to parse JSON from output: ${output}`);
-            }
-          } else {
-            throw new Error(`No JSON found in output: ${output}`);
-          }
-        }
-      }
-
+      // Extract JSON from mixed CLI output
+      const jsonResult = this.extractJsonFromCliOutput(output);
       log.debug('JSON Response:');
       log.debug(JSON.stringify(jsonResult, null, 2));
 
@@ -312,8 +322,6 @@ class PhalaDeployer {
       // Extract App ID from JSON response
       const appId = jsonResult.app_id;
       if (!appId) {
-        log.error('Could not find App ID in JSON response:');
-        console.log(JSON.stringify(jsonResult, null, 2));
         throw new Error('Failed to extract App ID from deployment output');
       }
 
@@ -327,20 +335,27 @@ class PhalaDeployer {
         log.info(`Dashboard: ${jsonResult.dashboard_url}`);
       }
 
-      // Store deployment info in our own config file
-      const deploymentInfoFile = path.join(deploymentDir, 'deployment-info.json');
-      const deploymentInfo = {
+      // Update deployment state with success
+      this.saveDeploymentState(config.name, {
         name: config.name,
+        status: 'deployed',
         app_id: appId,
         vm_uuid: jsonResult.vm_uuid || null,
         dashboard_url: jsonResult.dashboard_url || null,
         deployed_at: new Date().toISOString()
-      };
-      fs.writeFileSync(deploymentInfoFile, JSON.stringify(deploymentInfo, null, 2));
-      log.debug(`Saved deployment info to ${deploymentInfoFile}`);
+      });
 
       return appId;
     } catch (error) {
+      // Save failed state so we can recover
+      this.saveDeploymentState(config.name, {
+        name: config.name,
+        status: 'failed',
+        app_id: null,
+        vm_uuid: null,
+        error: error.message,
+        failed_at: new Date().toISOString()
+      });
       log.error(`Deployment failed: ${error.message}`);
       throw error;
     }
@@ -576,24 +591,24 @@ class PhalaDeployer {
           log.info('Scanning deployment configurations...');
         }
 
-        // Read all deployment configs to get CVM UUIDs
+        // Read all deployment states from deployment-info.json
         const deploymentConfigs = [];
         if (fs.existsSync(this.deploymentsDir)) {
-          const deployments = fs.readdirSync(this.deploymentsDir);
+          const deployments = fs.readdirSync(this.deploymentsDir).filter(name =>
+            !name.startsWith('.') // Skip hidden files like .vpc_server_id
+          );
 
           for (const deploymentName of deployments) {
-            const configPath = path.join(this.deploymentsDir, deploymentName, '.phala', 'config');
-            if (fs.existsSync(configPath)) {
-              try {
-                const configContent = fs.readFileSync(configPath, 'utf8');
-                const config = JSON.parse(configContent);
-                deploymentConfigs.push({
-                  name: deploymentName,
-                  uuid: config.cvmUuid,
-                  configPath
-                });
-              } catch (error) {
-                log.warn(`Failed to read config for ${deploymentName}: ${error.message}`);
+            const state = this.getDeploymentState(deploymentName);
+            if (state && state.app_id) {
+              deploymentConfigs.push({
+                name: deploymentName,
+                app_id: state.app_id,
+                vm_uuid: state.vm_uuid
+              });
+            } else if (state && state.status === 'deploying') {
+              if (!watch) {
+                log.warn(`${deploymentName} is still deploying or deployment failed`);
               }
             }
           }
@@ -615,20 +630,26 @@ class PhalaDeployer {
         // Match deployment configs with CVMs
         const matchedCvms = [];
         for (const config of deploymentConfigs) {
-          const output = await cloudCli('cvms', 'get', config.uuid, '--json');
-          if (output) {
-            try {
-              const parsed = JSON.parse(output);
-              matchedCvms.push({
-                ...parsed,
-                deploymentName: config.name,
-                configPath: config.configPath
-              })
-              continue
-            } catch (e) {
+          try {
+            const output = await cloudCli('cvms', 'get', config.app_id, '--json');
+            log.debug(`Got output for ${config.name}: ${output ? output.substring(0, 100) : 'empty'}`);
+
+            if (output) {
+              try {
+                const parsed = this.extractJsonFromCliOutput(output);
+                matchedCvms.push({
+                  ...parsed,
+                  deploymentName: config.name
+                })
+              } catch (e) {
+                log.warn(`Failed to parse JSON for ${config.name}: ${e.message}`);
+              }
+            } else {
+              log.warn(`Empty output for ${config.name}`);
             }
+          } catch (error) {
+            log.warn(`Failed to fetch CVM for ${config.name}: ${error.message}`);
           }
-          log.warn(`CVM not found for deployment ${config.name} (UUID: ${config.uuid})`);
         }
 
         if (matchedCvms.length === 0) {
@@ -939,53 +960,31 @@ class PhalaDeployer {
 
     log.info('Scanning deployment configurations...');
 
-    // Read all deployment configs to get app_ids
+    // Read all deployment states
     const deploymentConfigs = [];
     if (fs.existsSync(this.deploymentsDir)) {
-      const deployments = fs.readdirSync(this.deploymentsDir);
+      const deployments = fs.readdirSync(this.deploymentsDir).filter(name =>
+        !name.startsWith('.') // Skip hidden files
+      );
 
       for (const deploymentName of deployments) {
-        const deploymentInfoPath = path.join(this.deploymentsDir, deploymentName, 'deployment-info.json');
         const deploymentDir = path.join(this.deploymentsDir, deploymentName);
+        const state = this.getDeploymentState(deploymentName);
 
-        // Try to read our deployment info file first
-        if (fs.existsSync(deploymentInfoPath)) {
-          try {
-            const infoContent = fs.readFileSync(deploymentInfoPath, 'utf8');
-            const info = JSON.parse(infoContent);
-            deploymentConfigs.push({
-              name: deploymentName,
-              app_id: info.app_id,
-              vm_uuid: info.vm_uuid,
-              deploymentDir
-            });
-            continue;
-          } catch (error) {
-            log.warn(`Failed to read deployment info for ${deploymentName}: ${error.message}`);
-          }
+        if (state && (state.app_id || state.vm_uuid)) {
+          deploymentConfigs.push({
+            name: deploymentName,
+            app_id: state.app_id,
+            vm_uuid: state.vm_uuid,
+            deploymentDir
+          });
         }
-
-        // Fallback to reading phala config if our info file doesn't exist
-        const configPath = path.join(deploymentDir, '.phala', 'config');
-        if (fs.existsSync(configPath)) {
-          try {
-            const configContent = fs.readFileSync(configPath, 'utf8');
-            const config = JSON.parse(configContent);
-            deploymentConfigs.push({
-              name: deploymentName,
-              vm_uuid: config.cvmUuid,
-              app_id: null, // Will need to fetch from CVM list
-              deploymentDir
-            });
-          } catch (error) {
-            log.warn(`Failed to read config for ${deploymentName}: ${error.message}`);
-          }
-        }
+        // Silently skip directories without state (already cleaned up)
       }
     }
 
     if (deploymentConfigs.length === 0) {
-      log.info('No deployment configurations found');
+      log.info('No deployed CVMs found. Everything is already clean!');
       return;
     }
 
@@ -1052,26 +1051,50 @@ class PhalaDeployer {
         const originalDir = process.cwd();
         process.chdir(config.deploymentDir);
 
+        let deleted = false;
         try {
           // Delete the CVM using phala CLI with the correct app_id
           await cloudCli('cvms', 'delete', appId, '--force');
-
           log.success(`✓ Deleted ${config.name}`);
-          successCount++;
+          deleted = true;
+        } catch (error) {
+          // Check if CVM is already deleted (not detected)
+          if (error.message.includes('not detected')) {
+            log.success(`✓ ${config.name} (already deleted)`);
+            deleted = true;
+          } else {
+            throw error; // Re-throw other errors
+          }
         } finally {
           process.chdir(originalDir);
         }
 
-        // Remove or keep deployment directory based on flag
-        if (removeDeploymentDir) {
-          try {
-            fs.rmSync(config.deploymentDir, { recursive: true, force: true });
-            log.debug(`Removed deployment directory: ${config.deploymentDir}`);
-          } catch (error) {
-            log.warn(`Failed to remove deployment directory: ${error.message}`);
+        if (deleted) {
+          successCount++;
+
+          // Always clean up state files for deleted CVMs
+          const stateFile = path.join(config.deploymentDir, 'deployment-info.json');
+          if (fs.existsSync(stateFile)) {
+            fs.unlinkSync(stateFile);
+            log.debug(`Removed state file for ${config.name}`);
           }
-        } else {
-          log.debug(`Keeping deployment directory: ${config.deploymentDir}`);
+
+          // Clean up .phala directory to prevent CLI from reusing old CVM references
+          const phalaDir = path.join(config.deploymentDir, '.phala');
+          if (fs.existsSync(phalaDir)) {
+            fs.rmSync(phalaDir, { recursive: true, force: true });
+            log.debug(`Removed stale .phala directory for ${config.name}`);
+          }
+
+          // Remove entire deployment directory if --rm flag is set
+          if (removeDeploymentDir) {
+            try {
+              fs.rmSync(config.deploymentDir, { recursive: true, force: true });
+              log.debug(`Removed deployment directory: ${config.deploymentDir}`);
+            } catch (error) {
+              log.warn(`Failed to remove deployment directory: ${error.message}`);
+            }
+          }
         }
 
       } catch (error) {
