@@ -124,7 +124,7 @@ class PhalaDeployer {
 
     if (config.envFile) {
       args.push('--env-file', config.envFile);
-      log.info(`Using env file: ${config.envFile}`);
+      log.info(`Using encrypted secret file: ${config.envFile}`);
     }
 
     // Save "deploying" state BEFORE calling CLI (protects against CLI failure)
@@ -153,21 +153,15 @@ class PhalaDeployer {
       }
 
       log.success(`Deployed ${jsonResult.name} with App ID: ${appId}`);
-
-      if (jsonResult.vm_uuid) {
-        log.info(`VM UUID: ${jsonResult.vm_uuid}`);
-      }
-      if (jsonResult.dashboard_url) {
-        log.info(`Dashboard: ${jsonResult.dashboard_url}`);
-      }
-
+      log.info(`VM UUID: ${jsonResult.vm_uuid}`);
+      log.info(`Dashboard: ${jsonResult.dashboard_url}`);
 
       this.saveDeploymentState(config.name, {
         name: config.name,
         status: 'deployed',
         app_id: appId,
-        vm_uuid: jsonResult.vm_uuid || null,
-        dashboard_url: jsonResult.dashboard_url || null,
+        vm_uuid: jsonResult.vm_uuid,
+        dashboard_url: jsonResult.dashboard_url,
         deployed_at: new Date().toISOString()
       });
 
@@ -321,21 +315,15 @@ class PhalaDeployer {
     log.info('Starting complete MongoDB cluster deployment...');
     log.info('This will execute all three steps automatically\n');
 
-    try {
-      await this.deployStep1();
-      log.info('');
+    await this.deployStep1();
+    log.info('');
 
-      await this.deployStep2();
-      log.info('');
+    await this.deployStep2();
+    log.info('');
 
-      console.log('\n' + '═'.repeat(80));
-      log.success('🎉 Complete MongoDB cluster deployment finished!');
-      console.log('═'.repeat(80));
-
-    } catch (error) {
-      log.error(`Cluster deployment failed: ${error.message}`);
-      process.exit(1);
-    }
+    console.log('\n' + '═'.repeat(80));
+    log.success('🎉 Complete MongoDB cluster deployment finished!');
+    console.log('═'.repeat(80));
   }
 
   async fetchCVMs(deploymentConfigs, silentErrors = false) {
@@ -433,40 +421,31 @@ class PhalaDeployer {
     await this.checkAuth();
 
     const showStatusOnce = async () => {
-      try {
-        if (!watch) {
-          log.info('Scanning deployment configurations...');
-          log.info('Fetching CVM status from Phala Cloud...');
-        }
-
-        const statusData = await this.getClusterStatusData();
-        const renderedOutput = renderClusterStatus(statusData);
-
-        if (watch) {
-          console.clear();
-          const now = new Date().toLocaleTimeString();
-          console.log(`🔄 Auto-refreshing every ${interval / 1000}s | Last update: ${now}`);
-          console.log('   Press Ctrl+C to stop\n');
-        }
-        console.log(renderedOutput);
-
-      } catch (error) {
-        console.error(error);
-        log.error(`Failed to fetch cluster status: ${error.message}`);
+      if (!watch) {
+        log.info('Scanning deployment configurations...');
+        log.info('Fetching CVM status from Phala Cloud...');
       }
+
+      const statusData = await this.getClusterStatusData();
+      const renderedOutput = renderClusterStatus(statusData);
+
+      if (watch) {
+        console.clear();
+        const now = new Date().toLocaleTimeString();
+        console.log(`🔄 Auto-refreshing every ${interval / 1000}s | Last update: ${now}`);
+        console.log('   Press Ctrl+C to stop\n');
+      }
+      console.log(renderedOutput);
     };
 
-    if (!watch) {
-      await showStatusOnce();
-    } else {
+    await showStatusOnce();
+    if (watch) {
       process.on('SIGINT', () => {
-        console.log('\n\n👋 Stopping status monitor...');
         process.exit(0);
       });
-
       while (true) {
-        await showStatusOnce();
         await new Promise(resolve => setTimeout(resolve, interval));
+        await showStatusOnce();
       }
     }
   }
@@ -497,30 +476,21 @@ class PhalaDeployer {
     fs.writeFileSync(envFile, envContent);
 
     log.info(`Deploying ${appName}...`);
-    try {
-      const appId = await this.deployWithConfig({
-        ...appConfig,
-        name: appName,
-        envFile: envFile,
-        staticEnvs: {
-          VPC_SERVER_APP_ID: vpcServerId,
-        }
-      });
-
-      log.success(`Demo app deployed with App ID: ${appId}`);
-
-      try {
-        const appInfo = await cloudCli('cvms', 'get', `app_${appId}`);
-        console.log('\nApp details:');
-        console.log(appInfo);
-      } catch (error) {
-        log.warn(`Failed to get app details: ${error.message}`);
+    const appId = await this.deployWithConfig({
+      ...appConfig,
+      name: appName,
+      envFile: envFile,
+      staticEnvs: {
+        VPC_SERVER_APP_ID: vpcServerId,
       }
+    });
 
-    } catch (error) {
-      log.error(`Demo app deployment failed: ${error.message}`);
-      process.exit(1);
-    }
+    log.success(`Demo app deployed with App ID: ${appId}`);
+
+    const appInfo = await cloudCli('cvms', 'get', `app_${appId}`);
+    console.log('\nApp details:');
+    console.log(appInfo);
+
   }
 
   async teardown() {
@@ -575,11 +545,7 @@ class PhalaDeployer {
     if (needsFetch) {
       log.info('Fetching CVM list to get missing app IDs...');
       const listOutput = await cloudCli('cvms', 'list', '--json');
-      try {
-        allCvms = extractJsonArrayFromCliOutput(listOutput);
-      } catch (e) {
-        log.error('Failed to parse CVM list');
-      }
+      allCvms = extractJsonArrayFromCliOutput(listOutput);
     }
 
     for (const config of deploymentConfigs) {
@@ -602,9 +568,6 @@ class PhalaDeployer {
           continue;
         }
 
-        const originalDir = process.cwd();
-        process.chdir(config.deploymentDir);
-
         let deleted = false;
         try {
           await cloudCli('cvms', 'delete', appId, '--force');
@@ -617,19 +580,11 @@ class PhalaDeployer {
           } else {
             throw error;
           }
-        } finally {
-          process.chdir(originalDir);
         }
 
         if (deleted) {
           successCount++;
-
-          try {
-            fs.rmSync(config.deploymentDir, { recursive: true, force: true });
-            log.debug(`Removed deployment directory: ${config.deploymentDir}`);
-          } catch (error) {
-            log.warn(`Failed to remove deployment directory: ${error.message}`);
-          }
+          fs.rmSync(config.deploymentDir, { recursive: true, force: true });
         }
 
       } catch (error) {
