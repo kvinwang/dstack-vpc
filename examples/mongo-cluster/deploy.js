@@ -2,29 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-
-// Colors for output
-const colors = {
-  reset: '\x1b[0m',
-  red: '\x1b[31m',
-  green: '\x1b[32m',
-  yellow: '\x1b[33m',
-  blue: '\x1b[34m',
-  cyan: '\x1b[36m'
-};
-
-// Logging functions
-const log = {
-  info: (msg) => console.log(`${colors.blue}[INFO]${colors.reset} ${msg}`),
-  error: (msg) => console.log(`${colors.red}[ERROR]${colors.reset} ${msg}`),
-  success: (msg) => console.log(`${colors.green}[SUCCESS]${colors.reset} ${msg}`),
-  warn: (msg) => console.log(`${colors.yellow}[WARN]${colors.reset} ${msg}`),
-  debug: (msg) => {
-    if (process.env.DEBUG) {
-      console.log(`${colors.cyan}[DEBUG]${colors.reset} ${msg}`);
-    }
-  }
-};
+const { log, cloudCli, ensureDir, readJsonFile, writeJsonFile, formatCVMWithHealth, checkCVMHealth, extractJsonFromCliOutput } = require('./utils');
 
 const NODES = {
   "prod6": "11",
@@ -42,44 +20,6 @@ const NODE_TO_KMS = {
   "prod10": "phala-prod10",
 }
 
-// Helper function to execute phala CLI commands
-async function cloudCli(...args) {
-  const { spawn } = require('child_process');
-  const command = 'phala';
-  const fullArgs = [...args];
-
-  log.debug(`Executing: ${command} ${fullArgs.join(' ')}`);
-
-  return new Promise((resolve, reject) => {
-    let output = '';
-    let errorOutput = '';
-
-    const proc = spawn(command, fullArgs, {
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-
-    proc.stdout.on('data', (data) => {
-      output += data.toString();
-    });
-
-    proc.stderr.on('data', (data) => {
-      errorOutput += data.toString();
-    });
-
-    proc.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(`Command failed with exit code ${code}\n${errorOutput}\nCommand line: ${command} ${fullArgs.join(' ')}`));
-      } else {
-        resolve(output.trim());
-      }
-    });
-
-    proc.on('error', (error) => {
-      reject(error);
-    });
-  });
-}
-
 class PhalaDeployer {
   constructor() {
     this.scriptDir = __dirname;
@@ -88,65 +28,29 @@ class PhalaDeployer {
     this.vpcServerIdFile = path.join(this.deploymentsDir, '.vpc_server_id');
     this.config = null;
 
-    // Ensure deployments directory exists
-    if (!fs.existsSync(this.deploymentsDir)) {
-      fs.mkdirSync(this.deploymentsDir, { recursive: true });
-    }
+    ensureDir(this.deploymentsDir);
   }
 
   // Simple state helpers - single source of truth
   getDeploymentState(name) {
     const stateFile = path.join(this.deploymentsDir, name, 'deployment-info.json');
-    if (!fs.existsSync(stateFile)) {
-      return null;
-    }
-    try {
-      const content = fs.readFileSync(stateFile, 'utf8');
-      return JSON.parse(content);
-    } catch (error) {
-      log.warn(`Failed to read state for ${name}: ${error.message}`);
-      return null; // Treat corrupted state as not deployed
-    }
+    return readJsonFile(stateFile);
   }
 
   saveDeploymentState(name, state) {
-    const deploymentDir = path.join(this.deploymentsDir, name);
-    if (!fs.existsSync(deploymentDir)) {
-      fs.mkdirSync(deploymentDir, { recursive: true });
-    }
-    const stateFile = path.join(deploymentDir, 'deployment-info.json');
-    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+    ensureDir(path.join(this.deploymentsDir, name));
+    const stateFile = path.join(this.deploymentsDir, name, 'deployment-info.json');
+    writeJsonFile(stateFile, state);
     log.debug(`Saved state for ${name}`);
-  }
-
-  // Extract JSON from CLI output (handles mixed output with status messages)
-  // TODO: remove this once the CLI can stably output pure json file
-  extractJsonFromCliOutput(output) {
-    const jsonStart = output.indexOf('{');
-    const jsonEnd = output.lastIndexOf('}');
-
-    if (jsonStart === -1 || jsonEnd === -1) {
-      throw new Error(`No JSON found in output: ${output.substring(0, 100)}...`);
-    }
-
-    const jsonString = output.substring(jsonStart, jsonEnd + 1);
-    return JSON.parse(jsonString);
   }
 
   // Load configuration
   loadConfig() {
-    if (!fs.existsSync(this.configFile)) {
+    this.config = readJsonFile(this.configFile);
+    if (!this.config) {
       this.generateDefaultConfig();
     }
-
-    try {
-      const configData = fs.readFileSync(this.configFile, 'utf8');
-      this.config = JSON.parse(configData);
-      log.info(`Loaded configuration from: ${this.configFile}`);
-    } catch (error) {
-      log.error(`Failed to load config: ${error.message}`);
-      process.exit(1);
-    }
+    log.info(`Loaded configuration from: ${this.configFile}`);
   }
 
   // Generate default configuration
@@ -200,7 +104,7 @@ class PhalaDeployer {
       }
     };
 
-    fs.writeFileSync(this.configFile, JSON.stringify(defaultConfig, null, 2));
+    writeJsonFile(this.configFile, defaultConfig);
     log.info(`Generated default configuration at: ${this.configFile}`);
     log.warn('Please review and update the configuration before deploying');
     process.exit(0);
@@ -208,15 +112,9 @@ class PhalaDeployer {
 
   // Check authentication
   async checkAuth() {
-    try {
-      log.info('Checking authentication status...');
-      await cloudCli('auth', 'status');
-      log.success('Authentication verified ✓');
-    } catch (error) {
-      log.error('Not authenticated with Phala Network');
-      log.info('Please run: phala auth login');
-      process.exit(1);
-    }
+    log.info('Checking authentication status...');
+    await cloudCli('auth', 'status');
+    log.success('Authentication verified ✓');
   }
 
   // Execute phala deploy command in specific working directory
@@ -263,10 +161,7 @@ class PhalaDeployer {
       throw new Error('OS image is not configured');
     }
 
-    // Create isolated deployment directory
-    if (!fs.existsSync(deploymentDir)) {
-      fs.mkdirSync(deploymentDir, { recursive: true });
-    }
+    ensureDir(deploymentDir);
 
     // Copy compose file to deployment directory
     log.debug('Deployment parameters:');
@@ -310,7 +205,7 @@ class PhalaDeployer {
       const output = await this.executeDeploy(args, deploymentDir);
 
       // Extract JSON from mixed CLI output
-      const jsonResult = this.extractJsonFromCliOutput(output);
+      const jsonResult = extractJsonFromCliOutput(output);
       log.debug('JSON Response:');
       log.debug(JSON.stringify(jsonResult, null, 2));
 
@@ -364,14 +259,10 @@ class PhalaDeployer {
   // Deploy node
   async deployNode(index, vpcServerId) {
     const nodeConfig = this.config.nodes[index];
-
     log.info(`Deploying node: ${nodeConfig.name}...`);
 
-    // Create deployment directory first
     const deploymentDir = path.join(this.deploymentsDir, nodeConfig.name);
-    if (!fs.existsSync(deploymentDir)) {
-      fs.mkdirSync(deploymentDir, { recursive: true });
-    }
+    ensureDir(deploymentDir);
 
     const nodeInd = nodeConfig.index;
     if (nodeInd === undefined) {
@@ -382,19 +273,13 @@ class PhalaDeployer {
     const envContent = `NODE_IND=${nodeInd}\nVPC_SERVER_APP_ID=${vpcServerId}`;
     fs.writeFileSync(envFile, envContent);
 
-    try {
-      const appId = await this.deployWithConfig({
-        ...nodeConfig,
-        envFile: envFile,
-        staticEnvs: {
-          VPC_SERVER_APP_ID: vpcServerId,
-        }
-      });
-
-      return appId;
-    } catch (error) {
-      throw error;
-    }
+    return await this.deployWithConfig({
+      ...nodeConfig,
+      envFile: envFile,
+      staticEnvs: {
+        VPC_SERVER_APP_ID: vpcServerId,
+      }
+    });
   }
 
   // Render template file with variable substitution
@@ -573,6 +458,35 @@ class PhalaDeployer {
     }
   }
 
+  // Fetch CVM data for all deployments
+  async fetchCVMs(deploymentConfigs, silentErrors = false) {
+    const cvms = [];
+
+    for (const config of deploymentConfigs) {
+      try {
+        const cliOutput = await cloudCli('cvms', 'get', config.app_id, '--json');
+        log.debug(`Got output for ${config.name}: ${cliOutput ? cliOutput.substring(0, 100) : 'empty'}`);
+
+        if (!cliOutput) {
+          if (!silentErrors) log.warn(`Empty output for ${config.name}`);
+          continue;
+        }
+
+        const parsed = extractJsonFromCliOutput(cliOutput);
+        cvms.push({
+          ...parsed,
+          deploymentName: config.name
+        });
+      } catch (error) {
+        if (!silentErrors) {
+          log.warn(`Failed to fetch CVM for ${config.name}: ${error.message}`);
+        }
+      }
+    }
+
+    return cvms;
+  }
+
   // Show status of deployed cluster
   async showStatus(watch = false, interval = 5000) {
     await this.checkAuth();
@@ -630,30 +544,8 @@ class PhalaDeployer {
           log.info('Fetching CVM status from Phala Cloud...');
         }
 
-        // Match deployment configs with CVMs (fetch all data first)
-        const matchedCvms = [];
-        for (const config of deploymentConfigs) {
-          try {
-            const cliOutput = await cloudCli('cvms', 'get', config.app_id, '--json');
-            log.debug(`Got output for ${config.name}: ${cliOutput ? cliOutput.substring(0, 100) : 'empty'}`);
-
-            if (cliOutput) {
-              try {
-                const parsed = this.extractJsonFromCliOutput(cliOutput);
-                matchedCvms.push({
-                  ...parsed,
-                  deploymentName: config.name
-                })
-              } catch (e) {
-                if (!watch) log.warn(`Failed to parse JSON for ${config.name}: ${e.message}`);
-              }
-            } else {
-              if (!watch) log.warn(`Empty output for ${config.name}`);
-            }
-          } catch (error) {
-            if (!watch) log.warn(`Failed to fetch CVM for ${config.name}: ${error.message}`);
-          }
-        }
+        // Fetch all CVM data
+        const matchedCvms = await this.fetchCVMs(deploymentConfigs, watch);
 
         if (matchedCvms.length === 0) {
           if (watch) {
@@ -686,7 +578,7 @@ class PhalaDeployer {
         const healthData = new Map();
         for (const cvm of matchedCvms) {
           if (cvm.status === 'running' && cvm.dapp_dashboard_url) {
-            healthData.set(cvm.deploymentName, await this.checkCVMHealth(cvm.dapp_dashboard_url));
+            healthData.set(cvm.deploymentName, await checkCVMHealth(cvm.dapp_dashboard_url));
           }
         }
 
@@ -697,7 +589,7 @@ class PhalaDeployer {
         // Display VPC Server
         if (vpcServer) {
           output.push('🌐 VPC Server:');
-          output.push(...this.formatCVMWithHealth(vpcServer, healthData.get(vpcServer.deploymentName)));
+          output.push(...formatCVMWithHealth(vpcServer, healthData.get(vpcServer.deploymentName)));
           output.push('');
         }
 
@@ -705,7 +597,7 @@ class PhalaDeployer {
         if (mongoNodes.length > 0) {
           output.push('🗄️  MongoDB Cluster Nodes:');
           for (const cvm of mongoNodes) {
-            output.push(...this.formatCVMWithHealth(cvm, healthData.get(cvm.deploymentName)));
+            output.push(...formatCVMWithHealth(cvm, healthData.get(cvm.deploymentName)));
           }
           output.push('');
         }
@@ -714,7 +606,7 @@ class PhalaDeployer {
         if (demoApps.length > 0) {
           output.push('🚀 Demo Applications:');
           for (const cvm of demoApps) {
-            output.push(...this.formatCVMWithHealth(cvm, healthData.get(cvm.deploymentName)));
+            output.push(...formatCVMWithHealth(cvm, healthData.get(cvm.deploymentName)));
           }
           output.push('');
         }
@@ -766,203 +658,6 @@ class PhalaDeployer {
     }
   }
 
-  // Helper function to format CVM with health check (returns array of strings)
-  formatCVMWithHealth(cvm, healthStatus) {
-    const lines = [];
-    const statusIcon = cvm.status === 'running' ? '✅' :
-      cvm.status === 'stopped' ? '🔴' : '⚠️';
-
-    const name = cvm.deploymentName.padEnd(25);
-    const status = cvm.status.padEnd(10);
-    const uptime = cvm.hosted?.uptime || 'N/A';
-    const appId = cvm.app_id.substring(0, 8) + '...';
-
-    // Basic info line
-    lines.push(`  ${statusIcon} ${name} │ ${status} │ ${uptime.padEnd(12)} │ ${appId}`);
-
-    // Display URLs
-    if (cvm.dapp_dashboard_url && cvm.status === 'running') {
-      lines.push(`     └─ 📊 Dashboard: ${cvm.dapp_dashboard_url}`);
-    }
-
-    // Health check if running
-    if (cvm.status === 'running' && healthStatus) {
-      if (healthStatus.containers && healthStatus.containers.length > 0) {
-        lines.push(`     └─ 📦 Containers:`);
-        healthStatus.containers.forEach(container => {
-          const nameFormatted = container.name.padEnd(30);
-          lines.push(`        ${container.statusIcon} ${nameFormatted} │ ${container.status}`);
-        });
-      } else {
-        if (healthStatus.success) {
-          lines.push(`     └─ 💚 Health: ${healthStatus.message}`);
-        } else {
-          lines.push(`     └─ 💔 Health: ${healthStatus.message}`);
-        }
-      }
-    }
-
-    return lines;
-  }
-
-  // Helper function to display CVM with health check
-  async displayCVMWithHealth(cvm) {
-    const statusIcon = cvm.status === 'running' ? '✅' :
-      cvm.status === 'stopped' ? '🔴' : '⚠️';
-
-    const name = cvm.deploymentName.padEnd(25);
-    const status = cvm.status.padEnd(10);
-    const uptime = cvm.hosted?.uptime || 'N/A';
-    const appId = cvm.app_id.substring(0, 8) + '...';
-
-    // Basic info line
-    console.log(`  ${statusIcon} ${name} │ ${status} │ ${uptime.padEnd(12)} │ ${appId}`);
-
-    // Display URLs
-    if (cvm.dapp_dashboard_url && cvm.status === 'running') {
-      console.log(`     └─ 📊 Dashboard: ${cvm.dapp_dashboard_url}`);
-    }
-
-    // Health check if running
-    if (cvm.status === 'running' && cvm.dapp_dashboard_url) {
-      try {
-        const healthStatus = await this.checkCVMHealth(cvm.dapp_dashboard_url);
-
-        if (healthStatus.containers && healthStatus.containers.length > 0) {
-          console.log(`     └─ 📦 Containers:`);
-          healthStatus.containers.forEach(container => {
-            const nameFormatted = container.name.padEnd(30);
-            console.log(`        ${container.statusIcon} ${nameFormatted} │ ${container.status}`);
-          });
-        } else {
-          if (healthStatus.success) {
-            console.log(`     └─ 💚 Health: ${healthStatus.message}`);
-          } else {
-            console.log(`     └─ 💔 Health: ${healthStatus.message}`);
-          }
-        }
-      } catch (error) {
-        console.log(`     └─ ⚠️  Health check failed: ${error.message}`);
-      }
-    }
-  }
-
-  // Check CVM health via HTTP request
-  async checkCVMHealth(url) {
-    const https = require('https');
-    const http = require('http');
-
-    return new Promise((resolve) => {
-      const urlObj = new URL(url.replace('dstack-eth-prod6.phala.network', 'dstack-pha-prod6.phala.network'));
-      const options = {
-        hostname: urlObj.hostname,
-        port: urlObj.port,
-        path: '/', // Get the main dashboard page
-        method: 'GET',
-        timeout: 10000,
-        rejectUnauthorized: false
-      };
-
-      const client = urlObj.protocol === 'https:' ? https : http;
-
-      const req = client.request(options, (res) => {
-        let data = '';
-
-        res.on('data', (chunk) => {
-          data += chunk;
-        });
-
-        res.on('end', () => {
-          if (res.statusCode === 200) {
-            // Parse HTML to extract container status
-            const containerStatus = this.parseContainerStatus(data);
-            resolve(containerStatus);
-          } else {
-            resolve({ success: false, message: `HTTP ${res.statusCode}` });
-          }
-        });
-      });
-
-      req.on('error', () => {
-        resolve({ success: false, message: 'Connection failed' });
-      });
-
-      req.setTimeout(10000, () => {
-        req.destroy();
-        resolve({ success: false, message: 'Timeout' });
-      });
-
-      req.end();
-    });
-  }
-
-  // Parse HTML to extract container health status
-  parseContainerStatus(html) {
-    try {
-      // Extract container rows from the table
-      const tableRegex = /<tbody>(.*?)<\/tbody>/s;
-      const tableMatch = html.match(tableRegex);
-
-      if (!tableMatch) {
-        return { success: false, message: 'No container table found', containers: [] };
-      }
-
-      const tbody = tableMatch[1];
-      const rowRegex = /<tr>\s*<td>([^<]+)<\/td>\s*<td>([^<]+)<\/td>/g;
-      const containers = [];
-      let match;
-
-      while ((match = rowRegex.exec(tbody)) !== null) {
-        const name = match[1].trim();
-        const status = match[2].trim();
-
-        // Determine container health
-        let isHealthy = false;
-        let statusIcon = '🔴';
-
-        if (status.includes('Up')) {
-          if (status.includes('(healthy)') || name === 'app') {
-            isHealthy = true;
-            statusIcon = '💚';
-          } else {
-            statusIcon = '🟡'; // Up but not explicitly healthy
-          }
-        } else if (status.includes('Exited (0)')) {
-          // Exited with success code (like setup containers)
-          statusIcon = '✅';
-          isHealthy = true;
-        }
-
-        containers.push({
-          name,
-          status,
-          isHealthy,
-          statusIcon
-        });
-      }
-
-      if (containers.length === 0) {
-        return { success: false, message: 'No containers found', containers: [] };
-      }
-
-      // Overall health assessment
-      const healthyCount = containers.filter(c => c.isHealthy).length;
-      const upCount = containers.filter(c => c.status.includes('Up')).length;
-      const totalCount = containers.length;
-
-      const overallHealthy = healthyCount === containers.filter(c => !c.status.includes('Exited') || c.status.includes('Exited (0)')).length;
-
-      return {
-        success: overallHealthy,
-        message: `${upCount}/${totalCount} containers running`,
-        containers: containers
-      };
-
-    } catch (error) {
-      return { success: false, message: 'Failed to parse status', containers: [] };
-    }
-  }
-
   // Deploy test app
   async deployApp() {
     await this.checkAuth();
@@ -983,13 +678,8 @@ class PhalaDeployer {
 
     log.info('Deploying demo application...');
 
-    log.info(`App name: ${appName}, deployment directory: ${this.deploymentsDir}`);
-    // Create deployment directory for the app
     const deploymentDir = path.join(this.deploymentsDir, appName);
-    log.info(`Deployment directory: ${deploymentDir}`);
-    if (!fs.existsSync(deploymentDir)) {
-      fs.mkdirSync(deploymentDir, { recursive: true });
-    }
+    ensureDir(deploymentDir);
 
     // Write env file directly to deployment directory
     const envFile = path.join(deploymentDir, `.envfile`);
