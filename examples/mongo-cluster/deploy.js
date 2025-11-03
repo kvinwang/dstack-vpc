@@ -331,7 +331,7 @@ class PhalaDeployer {
 
     for (const config of deploymentConfigs) {
       try {
-        const cliOutput = await cloudCli('cvms', 'get', config.app_id, '--json');
+        const cliOutput = await cloudCli('cvms', 'get', config.vm_uuid, '--json');
         log.debug(`Got output for ${config.name}: ${cliOutput ? cliOutput.substring(0, 100) : 'empty'}`);
 
         if (!cliOutput) {
