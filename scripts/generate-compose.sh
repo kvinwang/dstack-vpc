@@ -39,14 +39,14 @@ gen-vpc-server() {
   fi
   cat <<EOF
   $VPC_SERVER_CONTAINER_NAME:
-    image: headscale/headscale@sha256:404e3251f14f080e99093e8855a4a70062271ac7111153eb02a1f879f9f200c8
+    image: headscale/headscale:v0.26.1@sha256:ea9b5ee06274d757a4d52103de56cd11a9c393acb19d9a35f4b9fe52ada410de
     container_name: $VPC_SERVER_CONTAINER_NAME
     restart: on-failure
     ports:
       - "8080:8080"
     volumes:
       - vpc_server_data:/var/lib/headscale
-      - /dstack/.dstack-service/headscale/config.yaml:/etc/headscale/config.yaml
+      - /dstack/.dstack-service/headscale:/etc/headscale
     command: serve
     healthcheck:
       test: ["CMD", "headscale", "users", "list"]
@@ -67,7 +67,7 @@ gen-vpc-server() {
       - vpc_api_server_data:/data
     command: /scripts/vpc-server-entry.sh
     depends_on:
-      - dstack-vpc-server
+      - $VPC_SERVER_CONTAINER_NAME
     networks:
       - project
 EOF

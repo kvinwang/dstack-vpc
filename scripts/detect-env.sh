@@ -8,6 +8,7 @@ get_container_id() {
 
 DSTACK_CONTAINER_ID=$(get_container_id)
 DSTACK_CONTAINER_IMAGE_ID=$(docker inspect $DSTACK_CONTAINER_ID --format='{{.Image}}')
+docker rm -f dstack-get-syscfg 2>/dev/null || true
 SYS_CONFIG=$(docker run --rm --name dstack-get-syscfg -v /dstack:/dstack $DSTACK_CONTAINER_IMAGE_ID cat /dstack/.host-shared/.sys-config.json 2>/dev/null)
 
 if [ -z "$DSTACK_GATEWAY_DOMAIN" ]; then
@@ -43,6 +44,7 @@ export DSTACK_SERVICE_NAME=$DSTACK_SERVICE_NAME
 EOF
 cat /etc/dstack/env
 
+docker rm -f dstack-copy-files 2>/dev/null || true
 docker run --rm --name dstack-copy-files -d -v /dstack:/dstack $DSTACK_CONTAINER_IMAGE_ID \
     sh -c "mkdir -p /dstack/.dstack-service/headscale && tail -f /dev/null"
 docker cp /etc/dstack/env dstack-copy-files:/dstack/.dstack-service/env

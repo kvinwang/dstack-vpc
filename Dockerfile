@@ -62,7 +62,7 @@ RUN chmod +x /scripts/*.sh
 
 EXPOSE 80 443 8091 8092
 
-HEALTHCHECK CMD /scripts/healthcheck.sh
+HEALTHCHECK --start-period=5m --timeout=20s CMD /scripts/healthcheck.sh
 
 ENTRYPOINT ["/scripts/entrypoint.sh"]
 CMD ["/scripts/auto-entry.sh"]

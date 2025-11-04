@@ -1,14 +1,13 @@
-
 services:
   dstack-service:
-    image: kvin/dstack-service@sha256:bc8288830006961bbbc797c71b4d84b11704f811d48d3b4efedb3cba31af497f
+    image: kvin/dstack-service@sha256:f3678d09e667d8a666ef4cf5e43c09848256f0e6771654f7dd69c7ff1b5f26d8
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - VPC_NODE_NAME=mongodb-${NODE_IND}
       - VPC_SERVER_APP_ID=${VPC_SERVER_APP_ID}
-  
+
   mongodb:
     image: mongo:7.0@sha256:228dfdc4e3ee9593ca98dcd4ae6997a788e57cb68a0836b9e8107555a7096705
     container_name: mongodb
@@ -29,7 +28,14 @@ services:
         mode: 0644
     command: /mongodb-start.sh
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "try { rs.status().ok } catch(e) { 0 }"]
+      test:
+        [
+          "CMD",
+          "mongosh",
+          "--quiet",
+          "--eval",
+          "try { rs.status().ok } catch(e) { 0 }",
+        ]
     dns:
       - 100.100.100.100
     dns_search:
@@ -53,7 +59,7 @@ configs:
         echo 'Installing wget...'
         apt-get update && apt-get install -y wget
       fi
-      
+
       echo 'Waiting for keyfile...'
       while ! wget --spider -q http://dstack-service/vpc/0/shared_key 2>/dev/null; do
         sleep 1
