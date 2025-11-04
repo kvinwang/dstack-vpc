@@ -29,6 +29,7 @@ EOF
 echo "Generating server certificate using dstack.sock HTTP API..."
 CERT_URL='http://localhost/GetTlsKey?subject=localhost&usage_server_auth=true&usage_client_auth=true'
 
+docker rm -f dstack-get-tls-key 2>/dev/null || true
 if ! docker run --rm --name dstack-get-tls-key -v /var/run/dstack.sock:/var/run/dstack.sock $DSTACK_CONTAINER_IMAGE_ID \
     curl -s --unix-socket /var/run/dstack.sock $CERT_URL >/tmp/server_response.json;
 then

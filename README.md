@@ -1,5 +1,7 @@
 # DStack VPC
 
+> **Experimental:** Features are still maturing, test coverage is limited, and breaking changes are likely. Treat any production use as high risk.
+
 Secure Virtual Private Cloud for DStack using Headscale VPN and service mesh.
 
 ## Components

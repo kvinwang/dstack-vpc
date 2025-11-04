@@ -1,6 +1,6 @@
 services:
   dstack-service:
-    image: kvin/dstack-service@sha256:bc8288830006961bbbc797c71b4d84b11704f811d48d3b4efedb3cba31af497f
+    image: kvin/dstack-service@sha256:f3678d09e667d8a666ef4cf5e43c09848256f0e6771654f7dd69c7ff1b5f26d8
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

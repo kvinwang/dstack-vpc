@@ -9,6 +9,7 @@ detect-env.sh
 source /etc/dstack/env
 
 if [ "$LOAD_MISSING_MODULES" != "false" ]; then
+    docker rm -f dstack-load-modules 2>/dev/null || true
     docker run --rm --name dstack-load-modules --privileged "$DSTACK_CONTAINER_IMAGE_ID" /scripts/load-modules.sh
 fi
 
