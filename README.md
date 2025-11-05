@@ -41,8 +41,8 @@ Environment variables:
 | `LOAD_MISSING_MODULES` | `true` | Loads `xt_mark`, `xt_connmark`, and related netfilter modules from the image onto the host. Required when running DStack versions earlier than 0.5.4; set to `false` once the modules are present on the host. |
 | `MESH_BACKEND` | '' | Address of the server-side application to which the service mesh proxies traffic (for example `backend-app:8080`). |
 | `VPC_SERVER_ENABLED` | `false` | Enables the Headscale control plane and VPC API server. Requires `VPC_ALLOWED_APPS` when set to `true`. |
-| `VPC_ALLOWED_APPS` | _(required when VPC is enabled)_ | Comma-separated list of application IDs allowed to access the VPC control plane; use `any` to allow all. |
-| `VPC_SERVER_APP_ID` | _(required when VPC or node setup is enabled)_ | Application ID of the VPC server inside the DStack gateway. Needed when `VPC_SERVER_ENABLED=true` or `VPC_NODE_NAME` is provided. |
+| `VPC_ALLOWED_APPS` | _(required when VPC server is enabled)_ | Comma-separated list of application IDs allowed to access the VPC control plane; use `any` to allow all. |
+| `VPC_SERVER_APP_ID` | _(required when VPC node is enabled)_ | Application ID of the VPC server inside the DStack gateway. Needed when `VPC_NODE_NAME` is provided. |
 | `VPC_SERVER_PORT` | `8080` | Exposed port for Headscale. Keep it in sync with your published port mapping. |
 | `VPC_NODE_NAME` | _(empty)_ | When set, the stack bootstraps a Tailscale node with this name via the generated VPC node containers. |
 
