@@ -1,0 +1,4 @@
+[submodule "headscale"]
+	path = headscale
+	url = https://github.com/Phala-Network/headscale.git
+	branch = dstack-vpc

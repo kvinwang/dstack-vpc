@@ -39,7 +39,7 @@ gen-vpc-server() {
   fi
   cat <<EOF
   $VPC_SERVER_CONTAINER_NAME:
-    image: headscale/headscale:v0.26.1@sha256:ea9b5ee06274d757a4d52103de56cd11a9c393acb19d9a35f4b9fe52ada410de
+    image: $DSTACK_CONTAINER_IMAGE_ID
     container_name: $VPC_SERVER_CONTAINER_NAME
     restart: on-failure
     ports:
@@ -47,7 +47,7 @@ gen-vpc-server() {
     volumes:
       - vpc_server_data:/var/lib/headscale
       - /dstack/.dstack-service/headscale:/etc/headscale
-    command: serve
+    command: headscale serve
     healthcheck:
       test: ["CMD", "headscale", "users", "list"]
     networks:

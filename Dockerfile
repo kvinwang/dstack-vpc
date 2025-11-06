@@ -13,6 +13,12 @@ RUN go mod init vpc-api-server || true
 RUN go get github.com/gin-gonic/gin
 RUN CGO_ENABLED=0 GOOS=linux go build -a -o vpc-api-server main.go
 
+FROM golang:1.25-alpine AS headscale-builder
+WORKDIR /build
+COPY headscale/ /build/
+RUN apk add --no-cache git make
+RUN CGO_ENABLED=0 GOOS=linux go build -a -ldflags="-s -w" -o headscale ./cmd/headscale
+
 FROM alpine AS ko-builder
 RUN apk add --no-cache wget jq bash squashfs-tools
 WORKDIR /build
@@ -49,6 +55,9 @@ RUN chmod +x /usr/local/bin/dstack-mesh
 
 COPY --from=go-builder /build/vpc-api-server /usr/local/bin/vpc-api-server
 RUN chmod +x /usr/local/bin/vpc-api-server
+
+COPY --from=headscale-builder /build/headscale /usr/local/bin/headscale
+RUN chmod +x /usr/local/bin/headscale
 
 COPY --from=ko-builder /build/netfilter-modules/*.ko /lib/extra-modules/
 
