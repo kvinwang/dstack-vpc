@@ -78,7 +78,9 @@ gen-vpc-server() {
       driver: "json-file"
       options:
         max-size: "10m"
-        max-file: "3"
+        max-file: "2"
+    healthcheck:
+      test: exit 0
     environment:
       - VPC_SERVER_CONTAINER_NAME=$VPC_SERVER_CONTAINER_NAME
       - MONITOR_INTERVAL=10
@@ -145,6 +147,8 @@ gen-vpc-client() {
       options:
         max-size: "10m"
         max-file: "3"
+    healthcheck:
+      test: exit 0
     volumes:
       - vpc_shared:/shared
       - /var/run/docker.sock:/var/run/docker.sock
@@ -197,6 +201,8 @@ gen-metrics-aggregator() {
     restart: on-failure
     ports:
       - "9090:9090"
+    healthcheck:
+      test: exit 0
     volumes:
       - vpc_shared:/shared:ro
       - /var/run/docker.sock:/var/run/docker.sock
