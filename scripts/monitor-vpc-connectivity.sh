@@ -13,33 +13,41 @@ log() {
 	echo "$LOG_PREFIX $*"
 }
 
-check_node_offline() {
-	# Check if this node has been replaced by checking Self.Active and InEngine status
-	# A replaced node will have Active=false, InMagicSock=false, InEngine=false
+diagnose_node_replacement() {
+	# Check if node was replaced by comparing local vs Headscale node keys
 	local status_json=$(docker exec "$VPC_CLIENT_CONTAINER" tailscale status --json 2>/dev/null)
-	local backend_state=$(echo "$status_json" | jq -r '.BackendState // "unknown"')
-	local self_active=$(echo "$status_json" | jq -r '.Self.Active // false')
-	local in_engine=$(echo "$status_json" | jq -r '.Self.InEngine // false')
-	local in_magicsock=$(echo "$status_json" | jq -r '.Self.InMagicSock // false')
-	local machine_key=$(echo "$status_json" | jq -r '.Self.PublicKey // "unknown"')
-	local hostname=$(echo "$status_json" | jq -r '.Self.HostName // "unknown"')
-	local ip=$(echo "$status_json" | jq -r '.Self.TailscaleIPs[0] // "unknown"')
+	local headscale_node_key=$(echo "$status_json" | jq -r '.Self.PublicKey // "unknown"')
 
-	# Check if node is inactive (likely replaced)
-	if [ "$backend_state" = "Running" ] && [ "$self_active" = "false" ] && [ "$in_engine" = "false" ]; then
-		log "⚠️  CRITICAL: Node is inactive!"
-		log "   Backend State: $backend_state"
-		log "   Self.Active: $self_active"
-		log "   Self.InEngine: $in_engine"
-		log "   Self.InMagicSock: $in_magicsock"
+	# Extract local private key from state file
+	local state_json=$(docker exec "$VPC_CLIENT_CONTAINER" cat /var/lib/tailscale/tailscaled.state 2>/dev/null)
+	local current_profile=$(echo "$state_json" | jq -r '."_current-profile"' | base64 -d 2>/dev/null)
+	local local_private_key=$(echo "$state_json" | jq -r ".\"$current_profile\"" 2>/dev/null | base64 -d 2>/dev/null | jq -r '.Config.PrivateNodeKey // "unknown"' 2>/dev/null)
+
+	# Compute public key from local private key
+	local computed_public_key=$(echo "$local_private_key" | python3 /scripts/compute-pubkey.py 2>/dev/null || echo "unknown")
+
+	log ""
+	log "=== Node Replacement Check ==="
+	log "Headscale node key: $headscale_node_key"
+	log "Computed local key: $computed_public_key"
+
+	# Compare keys
+	if [ "$computed_public_key" != "unknown" ] && [ "$computed_public_key" != "$headscale_node_key" ]; then
+		log ""
+		log "⚠️  CRITICAL: Node replacement detected!"
+		log "Local node key does NOT match Headscale's registration."
+		log "Another machine has registered with the same hostname and replaced this node."
+		log ""
+		log "Action: Take this node offline or restart it with a unique VPC_NODE_NAME."
+		return 0
+	elif [ "$computed_public_key" = "$headscale_node_key" ]; then
+		log "Keys match - this is a network connectivity issue."
+	else
+		log "Unable to verify keys - check manually."
 	fi
 
-	# Check for other abnormal states
-	if [ "$backend_state" != "Running" ]; then
-		log "⚠️  WARNING: Node is not in Running state!"
-		log "   Backend State: $backend_state"
-		log "   Action: Check Tailscale/Headscale connectivity"
-	fi
+	log ""
+	return 1
 }
 
 print_node_info() {
@@ -86,6 +94,12 @@ tailscale_ping_node() {
 
 run_network_diagnostics() {
 	log "All nodes failed ping test, running network diagnostics..."
+
+	# First check if this is due to node replacement
+	if diagnose_node_replacement; then
+		# Node replacement detected, no need for further diagnostics
+		return
+	fi
 
 	# Get tailscale status via docker exec
 	log "Tailscale status:"
@@ -142,10 +156,7 @@ log "VPC client container and Tailscale are ready"
 
 # Main monitoring loop
 while true; do
-	# Print node info at startup
 	print_node_info
-
-	check_node_offline
 
 	log "Starting connectivity check..."
 
@@ -191,7 +202,7 @@ while true; do
 
 			failed_count=$((failed_count + 1))
 		fi
-	done <<< "$node_list"
+	done <<<"$node_list"
 
 	log "Connectivity check complete: $success_count/$total_count nodes reachable (failed: $failed_count)"
 

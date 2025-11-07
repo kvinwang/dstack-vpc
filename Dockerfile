@@ -37,7 +37,11 @@ RUN apt-get update && apt-get install -y \
     socat \
     kmod \
     iputils-ping \
-    nodejs
+    nodejs \
+    python3 \
+    python3-pip
+
+RUN pip3 install --break-system-packages cryptography
 
 RUN curl -fsSL https://get.docker.com | sh
 RUN usermod -aG docker root
