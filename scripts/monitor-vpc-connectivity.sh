@@ -13,6 +13,47 @@ log() {
 	echo "$LOG_PREFIX $*"
 }
 
+check_node_offline() {
+	# Check if this node has been replaced by checking Self.Active and InEngine status
+	# A replaced node will have Active=false, InMagicSock=false, InEngine=false
+	local status_json=$(docker exec "$VPC_CLIENT_CONTAINER" tailscale status --json 2>/dev/null)
+	local backend_state=$(echo "$status_json" | jq -r '.BackendState // "unknown"')
+	local self_active=$(echo "$status_json" | jq -r '.Self.Active // false')
+	local in_engine=$(echo "$status_json" | jq -r '.Self.InEngine // false')
+	local in_magicsock=$(echo "$status_json" | jq -r '.Self.InMagicSock // false')
+	local machine_key=$(echo "$status_json" | jq -r '.Self.PublicKey // "unknown"')
+	local hostname=$(echo "$status_json" | jq -r '.Self.HostName // "unknown"')
+	local ip=$(echo "$status_json" | jq -r '.Self.TailscaleIPs[0] // "unknown"')
+
+	# Check if node is inactive (likely replaced)
+	if [ "$backend_state" = "Running" ] && [ "$self_active" = "false" ] && [ "$in_engine" = "false" ]; then
+		log "⚠️  CRITICAL: Node is inactive!"
+		log "   Backend State: $backend_state"
+		log "   Self.Active: $self_active"
+		log "   Self.InEngine: $in_engine"
+		log "   Self.InMagicSock: $in_magicsock"
+	fi
+
+	# Check for other abnormal states
+	if [ "$backend_state" != "Running" ]; then
+		log "⚠️  WARNING: Node is not in Running state!"
+		log "   Backend State: $backend_state"
+		log "   Action: Check Tailscale/Headscale connectivity"
+	fi
+}
+
+print_node_info() {
+	# Print current node information at startup
+	local machine_key=$(docker exec "$VPC_CLIENT_CONTAINER" tailscale status --json 2>/dev/null | jq -r '.Self.PublicKey // "unknown"')
+	local hostname=$(docker exec "$VPC_CLIENT_CONTAINER" tailscale status --json 2>/dev/null | jq -r '.Self.HostName // "unknown"')
+	local ip=$(docker exec "$VPC_CLIENT_CONTAINER" tailscale status --json 2>/dev/null | jq -r '.Self.TailscaleIPs[0] // "unknown"')
+
+	log "Node Information:"
+	log "   Hostname: $hostname"
+	log "   IP: $ip"
+	log "   Machine Key: $machine_key"
+}
+
 get_node_list() {
 	# Get all nodes from tailscale status via docker exec
 	# Return hostname only (will be resolved via DNS)
@@ -101,6 +142,11 @@ log "VPC client container and Tailscale are ready"
 
 # Main monitoring loop
 while true; do
+	# Print node info at startup
+	print_node_info
+
+	check_node_offline
+
 	log "Starting connectivity check..."
 
 	node_list=$(get_node_list)
