@@ -8,7 +8,9 @@ noise:
   private_key_path: /var/lib/headscale/noise_private.key
 
 prefixes:
-  v4: 100.128.0.0/10
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
 
 derp:
   server:
@@ -18,9 +20,10 @@ derp:
   paths: []
 
 database:
-  type: sqlite3
+  type: sqlite
   sqlite:
     path: /var/lib/headscale/db.sqlite
+    write_ahead_log: true
 
 log:
   format: text
