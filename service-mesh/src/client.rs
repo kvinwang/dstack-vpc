@@ -488,7 +488,7 @@ fn extract_target_info(request: &DstackRequest) -> Option<TargetInfo> {
         .target_port
         .as_ref()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(443);
+        .unwrap_or(8089);
 
     // Extract instance (optional)
     let instance = request.target_instance.clone().unwrap_or_default();

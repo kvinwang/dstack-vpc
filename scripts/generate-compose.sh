@@ -15,7 +15,7 @@ gen-dstack-mesh() {
     container_name: ${MESH_CONTAINER_NAME}
     restart: on-failure
     ports:
-      - "443:443"
+      - "8089:443"
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock
       - /var/run/docker.sock:/var/run/docker.sock
