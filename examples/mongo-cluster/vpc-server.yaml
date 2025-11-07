@@ -6,4 +6,5 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - VPC_SERVER_ENABLED=true
+      - VPC_METRICS_ENABLED=true
       - VPC_ALLOWED_APPS=${VPC_ALLOWED_APPS}

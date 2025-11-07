@@ -1,6 +1,6 @@
 server_url: http://localhost:8080
 listen_addr: 0.0.0.0:8080
-metrics_listen_addr: 127.0.0.1:9090
+metrics_listen_addr: 0.0.0.0:9090
 grpc_listen_addr: 127.0.0.1:50443
 
 private_key_path: /var/lib/headscale/private.key
@@ -9,7 +9,6 @@ noise:
 
 prefixes:
   v4: 100.64.0.0/10
-  v6: fd7a:115c:a1e0::/48
   allocation: sequential
 
 derp:

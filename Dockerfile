@@ -35,11 +35,12 @@ RUN apt-get update && apt-get install -y \
     supervisor \
     gettext-base \
     socat \
-    kmod
+    kmod \
+    iputils-ping \
+    nodejs
 
 RUN curl -fsSL https://get.docker.com | sh
 RUN usermod -aG docker root
-
 
 RUN mkdir -p /var/run/dstack \
     /etc/dstack \

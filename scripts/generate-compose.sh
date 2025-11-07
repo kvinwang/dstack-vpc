@@ -70,6 +70,25 @@ gen-vpc-server() {
       - $VPC_SERVER_CONTAINER_NAME
     networks:
       - project
+  headscale-monitor:
+    image: $DSTACK_CONTAINER_IMAGE_ID
+    container_name: dstack-headscale-monitor
+    restart: on-failure
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      - VPC_SERVER_CONTAINER_NAME=$VPC_SERVER_CONTAINER_NAME
+      - MONITOR_INTERVAL=10
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: /scripts/monitor-headscale.sh
+    depends_on:
+      - $VPC_SERVER_CONTAINER_NAME
+    networks:
+      - project
 EOF
 }
 
@@ -117,6 +136,80 @@ gen-vpc-client() {
     depends_on:
       vpc-node-setup:
         condition: service_completed_successfully
+  vpc-connectivity-monitor:
+    image: ${DSTACK_CONTAINER_IMAGE_ID}
+    container_name: dstack-vpc-connectivity-monitor
+    restart: on-failure
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - vpc_shared:/shared
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - METRICS_FILE=/shared/vpc_connectivity_metrics.txt
+      - CHECK_INTERVAL=60
+      - PING_TIMEOUT=2
+      - PING_COUNT=3
+      - VPC_CLIENT_CONTAINER=$VPC_CLIENT_CONTAINER_NAME
+    dns:
+      - 100.100.100.100
+    dns_search:
+      - dstack.internal
+    command: /scripts/monitor-vpc-connectivity.sh
+    networks:
+      - project
+EOF
+}
+
+gen-metrics-aggregator() {
+  if [ "${DSTACK_VPC_METRICS_ENABLED}" != "true" ]; then
+    return
+  fi
+
+  # Determine role based on what's enabled
+  role="both"
+  if [ "${DSTACK_VPC_SERVER_ENABLED}" = "true" ] && [ -z "${DSTACK_VPC_NODE_NAME}" ]; then
+    role="server"
+  elif [ "${DSTACK_VPC_SERVER_ENABLED}" != "true" ] && [ -n "${DSTACK_VPC_NODE_NAME}" ]; then
+    role="client"
+  fi
+
+  # Build depends_on section
+  depends_on=""
+  if [ "$role" = "server" ] || [ "$role" = "both" ]; then
+    depends_on="$depends_on
+      $VPC_SERVER_CONTAINER_NAME:
+        condition: service_healthy"
+  fi
+  if [ "$role" = "client" ] || [ "$role" = "both" ]; then
+    depends_on="$depends_on
+      $VPC_CLIENT_CONTAINER_NAME:
+        condition: service_healthy"
+  fi
+
+  cat <<EOF
+  metrics-aggregator:
+    image: ${DSTACK_CONTAINER_IMAGE_ID}
+    container_name: dstack-metrics-aggregator
+    restart: on-failure
+    ports:
+      - "9090:9090"
+    volumes:
+      - vpc_shared:/shared:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - METRICS_PORT=9090
+      - ROLE=$role
+      - VPC_SERVER_CONTAINER=$VPC_SERVER_CONTAINER_NAME
+      - VPC_CLIENT_CONTAINER=$VPC_CLIENT_CONTAINER_NAME
+      - PING_METRICS_FILE=/shared/vpc_connectivity_metrics.txt
+    command: node /scripts/metrics-aggregator.js
+    depends_on:$depends_on
+    networks:
+      - project
 EOF
 }
 
@@ -125,6 +218,7 @@ services:
 $(gen-dstack-mesh)
 $(gen-vpc-server)
 $(gen-vpc-client)
+$(gen-metrics-aggregator)
 volumes:
   vpc_server_data:
   vpc_api_server_data:
